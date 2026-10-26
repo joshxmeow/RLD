@@ -3,8 +3,11 @@ const USERS_KEY = "rld.users.v1";
 const ACTIVE_USER_KEY = "rld.activeUser";
 const REMEMBERED_USER_KEY = "rld.rememberedUser";
 const ESTIMATES_KEY = "rld.estimates.v1";
+const CLOUD_URL_KEY = "rld.cloudScriptUrl";
 const ADMIN_USERNAME = "rld";
 const ADMIN_PASSWORD_HASH = "662e0514c2fd58527dca88e2d8b5776efa997e2f81d2cc09bf402c69a4e68efc";
+let editingEstimateId = null;
+let syncQueueRunning = false;
 
 const authShell = document.getElementById("authShell");
 const appContainer = document.getElementById("appContainer");
@@ -36,8 +39,50 @@ function showApp(username) {
     appContainer.hidden = false;
     document.getElementById("activeUsername").textContent = username;
     const isAdmin = username === ADMIN_USERNAME;
-    document.getElementById("adminPanel").hidden = !isAdmin;
-    if (isAdmin) renderSignupRequests();
+    document.getElementById("showAdminPage").hidden = !isAdmin;
+    showPage("estimate");
+    updateConnectionStatus();
+    syncPendingEstimates();
+}
+
+function showPage(page) {
+    const isAdmin = sessionStorage.getItem(ACTIVE_USER_KEY) === ADMIN_USERNAME;
+    const showAdmin = page === "admin" && isAdmin;
+    const showHistory = page === "history";
+    document.getElementById("estimatePage").hidden = showAdmin;
+    document.getElementById("adminPage").hidden = !showAdmin;
+    document.getElementById("historyPage").hidden = !showHistory;
+    document.getElementById("estimatePage").hidden = showAdmin || showHistory;
+    document.getElementById("showEstimatePage").classList.toggle("active-page", !showAdmin && !showHistory);
+    document.getElementById("showHistoryPage").classList.toggle("active-page", showHistory);
+    document.getElementById("showAdminPage").classList.toggle("active-page", showAdmin);
+    if (showAdmin) renderAccounts();
+    if (showHistory) loadHistory();
+}
+
+function readEstimates() {
+    const saved = localStorage.getItem(ESTIMATES_KEY);
+    if (saved === null) return [];
+    const estimates = JSON.parse(saved);
+    if (!Array.isArray(estimates)) throw new Error("Saved estimate data is invalid.");
+    let migrated = false;
+    estimates.forEach((estimate, index) => {
+        if (!estimate.id) {
+            estimate.id = `${estimate.savedAt || Date.now()}-${index}`;
+            estimate.syncStatus = "unconfigured";
+            migrated = true;
+        }
+        if (!estimate.updatedAt) {
+            estimate.updatedAt = estimate.savedAt || new Date().toISOString();
+            migrated = true;
+        }
+    });
+    if (migrated) writeEstimates(estimates);
+    return estimates;
+}
+
+function writeEstimates(estimates) {
+    localStorage.setItem(ESTIMATES_KEY, JSON.stringify(estimates));
 }
 
 function showLogin() {
@@ -47,76 +92,97 @@ function showLogin() {
     setAuthMessage("");
 }
 
-function renderSignupRequests() {
-    const requests = document.getElementById("signupRequests");
-    requests.replaceChildren();
-    let users;
+function renderAccounts() {
+    const list = document.getElementById("accountList");
+    list.replaceChildren();
     try {
-        users = readUsers();
-    } catch (error) {
-        requests.textContent = `Could not load sign-up requests: ${error.message}`;
-        return;
-    }
-    const pendingUsers = users.filter(user => user.status === "pending");
-    if (pendingUsers.length === 0) {
-        requests.textContent = "No pending sign-up requests.";
-        return;
-    }
-
-    pendingUsers.forEach(user => {
-        const row = document.createElement("div");
-        row.className = "request-row";
-        const username = document.createElement("strong");
-        username.textContent = user.username;
-        const approve = document.createElement("button");
-        approve.type = "button";
-        approve.className = "request-button approve-button";
-        approve.textContent = "Approve";
-        approve.addEventListener("click", () => updateSignupRequest(user.username, "approved"));
-        const reject = document.createElement("button");
-        reject.type = "button";
-        reject.className = "request-button reject-button";
-        reject.textContent = "Reject";
-        reject.addEventListener("click", () => updateSignupRequest(user.username, "rejected"));
-        row.append(username, approve, reject);
-        requests.appendChild(row);
-    });
-}
-
-function updateSignupRequest(username, status) {
-    try {
-        const users = readUsers();
-        const user = users.find(item => item.username === username && item.status === "pending");
-        if (!user) {
-            document.getElementById("adminMessage").textContent = "That request is no longer pending.";
-            renderSignupRequests();
+        const users = readUsers().filter(user => user.username !== ADMIN_USERNAME);
+        if (users.length === 0) {
+            list.textContent = "No user accounts yet.";
             return;
         }
-        if (status === "approved") {
-            user.status = "approved";
-            localStorage.setItem(USERS_KEY, JSON.stringify(users));
-            document.getElementById("adminMessage").textContent = `${username} was approved.`;
-        } else {
-            localStorage.setItem(USERS_KEY, JSON.stringify(users.filter(item => item.username !== username)));
-            document.getElementById("adminMessage").textContent = `${username}'s request was rejected.`;
-        }
-        renderSignupRequests();
+        users.forEach(user => {
+            const row = document.createElement("form");
+            row.className = "account-row";
+            const name = document.createElement("strong");
+            name.textContent = user.username;
+            const status = document.createElement("span");
+            status.className = "account-status";
+            status.textContent = user.status === "approved" ? "Active" : "Pending";
+            const password = document.createElement("input");
+            password.type = "password";
+            password.autocomplete = "new-password";
+            password.autocapitalize = "none";
+            password.spellcheck = false;
+            password.minLength = 8;
+            password.placeholder = "New password (8+ characters)";
+            password.setAttribute("aria-label", `New password for ${user.username}`);
+            password.required = true;
+            const update = document.createElement("button");
+            update.type = "submit";
+            update.className = "request-button approve-button";
+            update.textContent = "Set password";
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "request-button reject-button";
+            remove.textContent = "Delete";
+            row.append(name, status, password, update, remove);
+            row.addEventListener("submit", event => {
+                event.preventDefault();
+                updateUserPassword(user.username, password.value);
+            });
+            remove.addEventListener("click", () => deleteUser(user.username));
+            list.appendChild(row);
+        });
     } catch (error) {
-        document.getElementById("adminMessage").textContent = `Could not update the request: ${error.message}`;
+        list.textContent = `Could not load accounts: ${error.message}`;
     }
 }
 
-document.getElementById("showSignup").addEventListener("click", () => {
-    document.getElementById("loginForm").hidden = true;
-    document.getElementById("signupForm").hidden = false;
-    setAuthMessage("");
-});
+function isAdminSession() {
+    return sessionStorage.getItem(ACTIVE_USER_KEY) === ADMIN_USERNAME;
+}
 
-document.getElementById("showLogin").addEventListener("click", () => {
-    document.getElementById("signupForm").hidden = true;
-    document.getElementById("loginForm").hidden = false;
-    setAuthMessage("");
-});
+async function updateUserPassword(username, password) {
+    if (!isAdminSession()) return;
+    if (password.length < 8) {
+        document.getElementById("adminMessage").textContent = "Passwords must be at least 8 characters.";
+        return;
+    }
+    try {
+        const users = readUsers();
+        const user = users.find(item => item.username === username);
+        if (!user) {
+            document.getElementById("adminMessage").textContent = "That account no longer exists.";
+            renderAccounts();
+            return;
+        }
+        user.passwordHash = await hashPassword(password);
+        user.status = "approved";
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        document.getElementById("adminMessage").textContent = `${username}'s password was updated.`;
+        renderAccounts();
+    } catch (error) {
+        document.getElementById("adminMessage").textContent = `Could not update the password: ${error.message}`;
+    }
+}
+
+function deleteUser(username) {
+    if (!isAdminSession()) return;
+    if (!window.confirm(`Delete the account "${username}"? This cannot be undone.`)) return;
+    try {
+        const users = readUsers().filter(user => user.username !== username);
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        document.getElementById("adminMessage").textContent = `${username}'s account was deleted.`;
+        renderAccounts();
+    } catch (error) {
+        document.getElementById("adminMessage").textContent = `Could not delete the account: ${error.message}`;
+    }
+}
+
+document.getElementById("showEstimatePage").addEventListener("click", () => showPage("estimate"));
+document.getElementById("showHistoryPage").addEventListener("click", () => showPage("history"));
+document.getElementById("showAdminPage").addEventListener("click", () => showPage("admin"));
 
 document.getElementById("loginForm").addEventListener("submit", async event => {
     event.preventDefault();
@@ -133,7 +199,7 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
             setAuthMessage("Incorrect username or password.");
             return;
         } else if (user.status !== "approved") {
-            setAuthMessage("Your sign-up request is still waiting for admin approval.");
+            setAuthMessage("This account is not active. Ask an administrator to set its password.");
             return;
         } else {
             sessionStorage.setItem(ACTIVE_USER_KEY, user.username);
@@ -148,42 +214,400 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
     }
 });
 
-document.getElementById("signupForm").addEventListener("submit", async event => {
+document.getElementById("createUserForm").addEventListener("submit", async event => {
     event.preventDefault();
-    const username = document.getElementById("signupUsername").value.trim().toLowerCase();
-    const password = document.getElementById("signupPassword").value;
-    const confirmPassword = document.getElementById("signupConfirmPassword").value;
+    if (!isAdminSession()) return;
+    const username = document.getElementById("newUsername").value.trim().toLowerCase();
+    const password = document.getElementById("newUserPassword").value;
     if (!/^[a-z0-9._-]{3,30}$/.test(username)) {
-        setAuthMessage("Use 3-30 characters: lowercase letters, numbers, dots, underscores, or hyphens.");
+        document.getElementById("adminMessage").textContent = "Use 3-30 characters: lowercase letters, numbers, dots, underscores, or hyphens.";
         return;
     }
     if (username === ADMIN_USERNAME) {
-        setAuthMessage("That username is reserved.");
+        document.getElementById("adminMessage").textContent = "That username is reserved.";
         return;
     }
-    if (password !== confirmPassword) {
-        setAuthMessage("The passwords do not match.");
+    if (password.length < 8) {
+        document.getElementById("adminMessage").textContent = "Passwords must be at least 8 characters.";
         return;
     }
     try {
         const users = readUsers();
         if (users.some(user => user.username === username)) {
-            setAuthMessage("That username already has an account or request.");
+            document.getElementById("adminMessage").textContent = "That username already exists.";
             return;
         }
         const passwordHash = await hashPassword(password);
-        users.push({ username, passwordHash, status: "pending" });
+        users.push({ username, passwordHash, status: "approved" });
         localStorage.setItem(USERS_KEY, JSON.stringify(users));
-        document.getElementById("signupForm").reset();
-        document.getElementById("signupForm").hidden = true;
-        document.getElementById("loginForm").hidden = false;
-        setAuthMessage("Sign-up request sent. The admin must approve it before you can sign in.");
+        document.getElementById("createUserForm").reset();
+        document.getElementById("adminMessage").textContent = `${username}'s account was created.`;
+        renderAccounts();
     } catch (error) {
-        setAuthMessage(`Could not submit your request: ${error.message}`);
+        document.getElementById("adminMessage").textContent = `Could not create the account: ${error.message}`;
     }
 });
 
 document.getElementById("logoutBtn").addEventListener("click", showLogin);
+
+function updateConnectionStatus() {
+    const indicator = document.getElementById("connectionStatus");
+    const online = navigator.onLine;
+    indicator.textContent = online ? "Connection: Online" : "Connection: Offline";
+    indicator.classList.toggle("online", online);
+    indicator.classList.toggle("offline", !online);
+}
+
+function getCloudUrl() {
+    return localStorage.getItem(CLOUD_URL_KEY) || "";
+}
+
+function updateHistoryStatus(estimateId, status, details = {}) {
+    const estimates = readEstimates();
+    const estimate = estimates.find(item => item.id === estimateId);
+    if (!estimate) return;
+    estimate.syncStatus = status;
+    if (status !== "synced") {
+        delete estimate.cloudFileId;
+        delete estimate.cloudUrl;
+    }
+    Object.assign(estimate, details);
+    writeEstimates(estimates);
+    if (!document.getElementById("historyPage").hidden) renderHistory();
+}
+
+function submitCloudOperation(payload) {
+    return new Promise((resolve, reject) => {
+        const endpoint = getCloudUrl();
+        if (!endpoint) {
+            reject(new Error("Google Drive sync is not configured."));
+            return;
+        }
+        const frame = document.getElementById("syncFrame");
+        const form = document.createElement("form");
+        const field = document.createElement("input");
+        form.method = "post";
+        form.action = endpoint;
+        form.target = frame.name;
+        form.hidden = true;
+        field.type = "hidden";
+        field.name = "payload";
+        field.value = JSON.stringify(payload);
+        form.appendChild(field);
+        document.body.appendChild(form);
+
+        const timeout = window.setTimeout(() => {
+            cleanup();
+            reject(new Error("Drive sync timed out. Check the Apps Script deployment and try again."));
+        }, 30000);
+        function cleanup() {
+            window.clearTimeout(timeout);
+            window.removeEventListener("message", onMessage);
+            form.remove();
+        }
+        function onMessage(event) {
+            if (event.source !== frame.contentWindow || !event.data || event.data.type !== "rld-drive-result") return;
+            cleanup();
+            if (event.data.success) resolve(event.data);
+            else reject(new Error(event.data.error || "The Drive script could not save the estimate."));
+        }
+        window.addEventListener("message", onMessage);
+        form.submit();
+    });
+}
+
+async function syncEstimate(estimate) {
+    if (!getCloudUrl()) {
+        updateHistoryStatus(estimate.id, "unconfigured");
+        return;
+    }
+    if (!navigator.onLine) {
+        updateHistoryStatus(estimate.id, estimate.deleted ? "offline-delete" : "offline");
+        return;
+    }
+    updateHistoryStatus(estimate.id, estimate.deleted ? "deleting" : "syncing");
+    try {
+        const result = await submitCloudOperation(estimate.deleted
+            ? { action: "delete", id: estimate.id }
+            : { action: "save", record: estimate });
+        if (estimate.deleted) {
+            writeEstimates(readEstimates().filter(item => item.id !== estimate.id));
+            if (!document.getElementById("historyPage").hidden) renderHistory();
+            return;
+        }
+        updateHistoryStatus(estimate.id, "synced", {
+            cloudFileId: result.fileId,
+            cloudUrl: result.fileUrl,
+            cloudUpdatedAt: result.updatedAt
+        });
+    } catch (error) {
+        updateHistoryStatus(estimate.id, navigator.onLine ? "error" : "offline", { syncError: error.message });
+    }
+}
+
+function syncPendingEstimates() {
+    if (!getCloudUrl()) {
+        try {
+            const estimates = readEstimates();
+            estimates.forEach(estimate => {
+                if (estimate.syncStatus !== "synced" && estimate.syncStatus !== "error") {
+                    estimate.syncStatus = "unconfigured";
+                }
+            });
+            writeEstimates(estimates);
+            if (!document.getElementById("historyPage").hidden) renderHistory();
+        } catch (error) {
+            document.getElementById("historyMessage").textContent = `Could not update sync status: ${error.message}`;
+        }
+        return;
+    }
+    if (!navigator.onLine) {
+        try {
+            const estimates = readEstimates();
+            estimates.forEach(estimate => {
+                if (estimate.syncStatus !== "synced" && estimate.syncStatus !== "error") {
+                    estimate.syncStatus = estimate.deleted ? "offline-delete" : "offline";
+                }
+            });
+            writeEstimates(estimates);
+            if (!document.getElementById("historyPage").hidden) renderHistory();
+        } catch (error) {
+            document.getElementById("historyMessage").textContent = `Could not update sync status: ${error.message}`;
+        }
+        updateConnectionStatus();
+        return;
+    }
+    if (syncQueueRunning) {
+        updateConnectionStatus();
+        return;
+    }
+    let estimates;
+    try {
+        estimates = readEstimates();
+    } catch (error) {
+        document.getElementById("historyMessage").textContent = `Could not read local history: ${error.message}`;
+        return;
+    }
+    syncQueueRunning = true;
+    (async () => {
+        try {
+            for (const estimate of estimates.filter(item =>
+                (item.deleted || item.syncStatus !== "synced") &&
+                !["syncing", "deleting", "error"].includes(item.syncStatus))) {
+                await syncEstimate(estimate);
+            }
+        } finally {
+            syncQueueRunning = false;
+            try {
+                if (readEstimates().some(item =>
+                    (item.syncStatus === "pending" || item.syncStatus === "offline" ||
+                        item.syncStatus === "offline-delete") &&
+                    !["syncing", "deleting"].includes(item.syncStatus))) {
+                    syncPendingEstimates();
+                }
+            } catch (error) {
+                document.getElementById("historyMessage").textContent = `Could not queue Drive sync: ${error.message}`;
+            }
+        }
+    })();
+}
+
+function getHistoryTitle(estimate) {
+    return estimate.data.clientName || estimate.data.fileSuffix || "Untitled estimate";
+}
+
+function getStatusLabel(estimate) {
+    switch (estimate.syncStatus) {
+        case "synced": return ["Synced to Drive", "synced"];
+        case "syncing": return ["Syncing...", "syncing"];
+        case "offline":
+        case "offline-delete": return ["Not synced — offline", "offline"];
+        case "deleting": return ["Removing from Drive...", "syncing"];
+        case "error": return [estimate.deleted ? "Delete failed" : "Sync failed", "error"];
+        default: return ["Not synced — configure Drive", "unconfigured"];
+    }
+}
+
+function renderHistory() {
+    const list = document.getElementById("historyList");
+    list.replaceChildren();
+    let estimates;
+    try {
+        estimates = readEstimates().filter(item => !item.deleted || item.syncStatus === "error")
+            .sort((a, b) => new Date(b.updatedAt || b.savedAt) - new Date(a.updatedAt || a.savedAt));
+    } catch (error) {
+        list.textContent = `Could not load estimate history: ${error.message}`;
+        return;
+    }
+    if (estimates.length === 0) {
+        list.textContent = "No saved estimates yet.";
+        return;
+    }
+    estimates.forEach(estimate => {
+        const row = document.createElement("div");
+        row.className = "history-row";
+        const details = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "history-title";
+        title.textContent = getHistoryTitle(estimate);
+        const meta = document.createElement("div");
+        meta.className = "history-meta";
+        meta.textContent = `${estimate.data.date || "No date"} · ${estimate.username || "Unknown user"}`;
+        details.append(title, meta);
+        const status = document.createElement("span");
+        const [label, className] = getStatusLabel(estimate);
+        status.className = `cloud-status ${className}`;
+        status.textContent = label;
+        row.append(details, status);
+        if (estimate.syncStatus === "error") {
+            const retry = document.createElement("button");
+            retry.type = "button";
+            retry.className = "request-button history-action";
+            retry.textContent = "Retry sync";
+            retry.addEventListener("click", () => {
+                updateHistoryStatus(estimate.id, estimate.deleted ? "offline-delete" : "pending");
+                syncPendingEstimates();
+            });
+            row.appendChild(retry);
+        }
+        if (estimate.deleted) {
+            list.appendChild(row);
+            return;
+        }
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "request-button history-action";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => editEstimate(estimate));
+        row.appendChild(edit);
+        if (estimate.cloudUrl) {
+            const open = document.createElement("a");
+            open.className = "request-button history-action";
+            open.href = estimate.cloudUrl;
+            open.target = "_blank";
+            open.rel = "noopener";
+            open.textContent = "Open in Drive";
+            row.appendChild(open);
+        }
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "request-button reject-button history-action";
+        remove.textContent = "Delete";
+        remove.addEventListener("click", () => deleteEstimate(estimate));
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
+
+function loadHistory() {
+    renderHistory();
+    if (!navigator.onLine || !getCloudUrl()) {
+        syncPendingEstimates();
+        return;
+    }
+    const callbackName = `rldHistory_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const script = document.createElement("script");
+    const timeout = window.setTimeout(() => finish(new Error("Could not reach Google Drive.")), 15000);
+    function finish(error, records) {
+        window.clearTimeout(timeout);
+        delete window[callbackName];
+        script.remove();
+        if (error) {
+            document.getElementById("historyMessage").textContent = `${error.message} Showing this device's saved history.`;
+            return;
+        }
+        try {
+            const estimates = readEstimates();
+            records.forEach(record => {
+                const existingIndex = estimates.findIndex(item => item.id === record.id);
+                const cloudRecord = { ...record, cloudUpdatedAt: record.updatedAt, syncStatus: "synced" };
+                if (existingIndex < 0) estimates.push(cloudRecord);
+                else if (!estimates[existingIndex].deleted && estimates[existingIndex].syncStatus === "synced" &&
+                    new Date(record.updatedAt) > new Date(estimates[existingIndex].cloudUpdatedAt ||
+                        estimates[existingIndex].updatedAt || estimates[existingIndex].savedAt)) {
+                    estimates[existingIndex] = cloudRecord;
+                }
+            });
+            writeEstimates(estimates);
+            renderHistory();
+            syncPendingEstimates();
+        } catch (loadError) {
+            document.getElementById("historyMessage").textContent = `Could not merge Drive history: ${loadError.message}`;
+        }
+    }
+    window[callbackName] = response => {
+        if (!response || !response.success) finish(new Error(response && response.error || "Drive history could not be loaded."));
+        else finish(null, response.records || []);
+    };
+    script.onerror = () => finish(new Error("Could not reach Google Drive."));
+    script.src = `${getCloudUrl()}?action=list&callback=${encodeURIComponent(callbackName)}&t=${Date.now()}`;
+    document.body.appendChild(script);
+}
+
+function editEstimate(estimate) {
+    const data = estimate.data;
+    ["date", "orgPrefix", "clientName", "address", "contact", "makeModel", "plateNo", "chassisNo", "engineNo", "color", "insurance", "fileSuffix", "downpayment"].forEach(id => {
+        const value = data[id];
+        document.getElementById(id).value = value === undefined || value === null ? "" : value;
+    });
+    const tbody = document.getElementById("worksBody");
+    tbody.replaceChildren();
+    (data.works || []).forEach(work => {
+        addRow();
+        const row = tbody.lastElementChild;
+        row.querySelector(".works-input").value = work.desc;
+        row.querySelector(".labor-cost").value = work.labor ? formatPHP(Number(work.labor)) : "";
+        row.querySelector(".parts-cost").value = work.parts ? formatPHP(Number(work.parts)) : "";
+    });
+    addRow();
+    calc();
+    editingEstimateId = estimate.id;
+    document.getElementById("saveBtn").textContent = "UPDATE";
+    document.getElementById("historyMessage").textContent = `Editing ${getHistoryTitle(estimate)}.`;
+    showPage("estimate");
+}
+
+function deleteEstimate(estimate) {
+    if (!window.confirm(`Delete "${getHistoryTitle(estimate)}" from history and Drive?`)) return;
+    try {
+        const estimates = readEstimates();
+        const existing = estimates.find(item => item.id === estimate.id);
+        if (!existing) return;
+        existing.deleted = true;
+        existing.syncStatus = "offline-delete";
+        writeEstimates(estimates);
+        renderHistory();
+        if (getCloudUrl() && navigator.onLine) syncPendingEstimates();
+    } catch (error) {
+        document.getElementById("historyMessage").textContent = `Could not delete estimate: ${error.message}`;
+    }
+}
+
+document.getElementById("cloudScriptUrl").value = getCloudUrl();
+document.getElementById("cloudSettingsForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (!isAdminSession()) return;
+    const url = document.getElementById("cloudScriptUrl").value.trim();
+    if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) {
+        document.getElementById("cloudSettingsMessage").textContent = "Enter a deployed Google Apps Script web-app URL ending in /exec.";
+        return;
+    }
+    localStorage.setItem(CLOUD_URL_KEY, url);
+    document.getElementById("cloudSettingsMessage").textContent = url
+        ? "Drive sync URL saved. Pending estimates will sync when online."
+        : "Drive sync URL removed. Estimates will remain saved on this device.";
+    syncPendingEstimates();
+});
+
+window.addEventListener("online", () => {
+    updateConnectionStatus();
+    syncPendingEstimates();
+});
+window.addEventListener("offline", () => {
+    updateConnectionStatus();
+    syncPendingEstimates();
+});
+updateConnectionStatus();
 
 try {
     const rememberedUsername = localStorage.getItem(REMEMBERED_USER_KEY);
@@ -350,8 +774,32 @@ function mergeSingleCostsForPrint() {
             rowsToMerge.pop();
         }
 
+        const bundleAllPrices = document.getElementById("bundleAllPrices").checked;
         const bundleLabor = document.getElementById('bundleLabor').checked;
-        if (!bundleLabor || isPartsSection || rowsToMerge.length < 2) return;
+        if (rowsToMerge.length < 2) return;
+
+        if (bundleAllPrices) {
+            const sourceCellsByCost = [1, 2].map(cellIndex =>
+                rowsToMerge.map(row => row.children[cellIndex]));
+            sourceCellsByCost.forEach((sourceCells, costIndex) => {
+                const inputSelector = costIndex === 0 ? ".labor-cost" : ".parts-cost";
+                const total = rowsToMerge.reduce((sum, row) =>
+                    sum + cleanNum(row.querySelector(inputSelector).value), 0);
+                if (total === 0) return;
+
+                const mergedCell = sourceCells[0].cloneNode(true);
+                const mergedInput = mergedCell.querySelector(inputSelector);
+                mergedInput.value = formatPHP(total);
+                mergedInput.readOnly = true;
+                mergedCell.rowSpan = rowsToMerge.length;
+                mergedCell.classList.add("print-merged-cell");
+                sourceCells.forEach(cell => cell.classList.add("print-merged-source"));
+                rowsToMerge[0].insertBefore(mergedCell, sourceCells[0]);
+            });
+            return;
+        }
+
+        if (!bundleLabor || isPartsSection) return;
 
         const laborRows = rowsToMerge.filter(row => {
             const input = row.querySelector('.labor-cost');
@@ -407,8 +855,8 @@ window.addEventListener('afterprint', () => {
     document.querySelectorAll('.print-merged-source').forEach(cell => cell.classList.remove('print-merged-source'));
 });
 
-// --- SAVE DATA OFFLINE ---
-document.getElementById('saveBtn').addEventListener('click', function() {
+// --- SAVE ESTIMATES AND QUEUE DRIVE SYNC ---
+function collectEstimateData() {
     const data = {
         date: document.getElementById('date').value,
         orgPrefix: document.getElementById('orgPrefix').value,
@@ -444,19 +892,37 @@ document.getElementById('saveBtn').addEventListener('click', function() {
             });
         }
     });
+    return data;
+}
 
+document.getElementById("saveBtn").addEventListener("click", function() {
     try {
-        const saved = localStorage.getItem(ESTIMATES_KEY);
-        const estimates = saved === null ? [] : JSON.parse(saved);
-        if (!Array.isArray(estimates)) throw new Error("Saved estimate data is invalid.");
-        estimates.push({
-            savedAt: new Date().toISOString(),
-            username: sessionStorage.getItem(ACTIVE_USER_KEY),
-            data
-        });
-        localStorage.setItem(ESTIMATES_KEY, JSON.stringify(estimates));
-        alert("Estimate saved in this browser on this device.");
+        const estimates = readEstimates();
+        const existing = editingEstimateId ? estimates.find(item => item.id === editingEstimateId) : null;
+        const savedAt = new Date().toISOString();
+        const estimate = {
+            ...(existing || {}),
+            id: editingEstimateId || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+            savedAt: existing ? existing.savedAt : savedAt,
+            updatedAt: savedAt,
+            username: existing ? existing.username : sessionStorage.getItem(ACTIVE_USER_KEY),
+            data: collectEstimateData(),
+            syncStatus: getCloudUrl() ? (navigator.onLine ? "pending" : "offline") : "unconfigured",
+            deleted: false
+        };
+        const index = estimates.findIndex(item => item.id === estimate.id);
+        if (index < 0) estimates.push(estimate);
+        else estimates[index] = estimate;
+        writeEstimates(estimates);
+
+        editingEstimateId = null;
+        this.textContent = "SAVE";
+        document.getElementById("historyMessage").textContent = getCloudUrl()
+            ? "Saved locally. Drive sync is starting."
+            : "Saved locally. Configure the Apps Script URL in Manage accounts to sync with Drive.";
+        syncPendingEstimates();
+        if (!document.getElementById("historyPage").hidden) renderHistory();
     } catch (error) {
-        alert(`Could not save this estimate offline: ${error.message}`);
+        alert(`Could not save this estimate: ${error.message}`);
     }
 });

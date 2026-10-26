@@ -20,7 +20,7 @@ body {
 .auth-card h1 { margin: 0; color: var(--accent); text-align: center; letter-spacing: 1px; }
 .auth-subtitle, .auth-help { text-align: center; opacity: 0.8; font-size: 13px; }
 .auth-form { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
-.auth-form h2, .admin-panel h2 { margin: 0 0 6px; color: var(--accent); font-size: 18px; }
+.auth-form h2, .admin-panel h1, .admin-panel h2 { margin: 0 0 6px; color: var(--accent); font-size: 18px; }
 .auth-form > label:not(.remember-option) { font-size: 13px; }
 .auth-form input:not([type="checkbox"]) { text-transform: none; font-weight: normal !important; }
 .auth-form input[type="password"] { text-transform: none !important; }
@@ -32,12 +32,39 @@ body {
 .storage-note { margin: 18px 0 0; opacity: 0.65; font-size: 11px; line-height: 1.5; }
 .admin-panel { margin-bottom: 24px; padding: 18px; border: 1px solid var(--border-color); border-radius: 8px; }
 .admin-panel .auth-help { text-align: left; }
-.request-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-color); }
-.request-row strong { flex: 1; }
+.account-create-form { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr) auto; align-items: end; gap: 10px; margin: 20px 0; }
+.account-field { display: flex; flex-direction: column; gap: 6px; }
+.account-create-form label { font-size: 12px; }
+.account-create-form input, .account-row input { text-transform: none; font-weight: normal !important; }
+.account-create-form input[type="password"], .account-row input[type="password"] { text-transform: none !important; }
+.account-create-form .btn { padding: 9px; }
+.account-row { display: grid; grid-template-columns: minmax(100px, 1fr) auto minmax(150px, 1.5fr) auto auto; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-color); }
+.account-status { font-size: 12px; opacity: 0.75; }
 .request-button { padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-main); cursor: pointer; }
 .approve-button { border-color: #00ff88; color: #00ff88; }
 .reject-button { border-color: #ff7070; color: #ff9999; }
 .app-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-bottom: 14px; font-size: 13px; }
+.app-toolbar .active-page { color: #fff; text-decoration: none; font-weight: bold; }
+.connection-status { margin-right: auto; font-weight: bold; }
+.connection-status.online { color: #00ff88; }
+.connection-status.offline { color: #ffcf70; }
+.history-row { display: grid; grid-template-columns: minmax(160px, 1fr) auto auto auto; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border-color); }
+.history-title { font-weight: bold; }
+.history-meta { font-size: 12px; opacity: 0.75; }
+.cloud-status { white-space: nowrap; font-size: 12px; }
+.cloud-status.synced { color: #00ff88; }
+.cloud-status.syncing { color: var(--accent); }
+.cloud-status.offline, .cloud-status.error, .cloud-status.unconfigured { color: #ffcf70; }
+.history-action { padding: 7px 10px; }
+.cloud-settings { margin-top: 26px; border-top: 1px solid var(--border-color); padding-top: 18px; }
+.setup-instructions { padding-left: 22px; font-size: 12px; line-height: 1.7; opacity: 0.85; }
+.setup-instructions a { color: var(--accent); }
+.setup-warning { color: #ffcf70; font-size: 12px; line-height: 1.5; }
+.cloud-settings code { color: var(--accent); }
+.cloud-settings-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+.cloud-settings-form label { grid-column: 1 / -1; font-size: 12px; }
+.cloud-settings-form input { text-transform: none; font-weight: normal !important; }
+.cloud-settings-form .btn { padding: 9px; }
 .print-banner, .print-show, .print-only { display: none !important; }
 
 .header { text-align: center; margin-bottom: 20px; line-height: 1.4; }
@@ -84,6 +111,16 @@ th { background: rgba(255,255,255,0.05); color: var(--accent); font-size: 13px; 
 .buttons { margin-top: 40px; display: flex; gap: 15px; }
 .btn { padding: 15px; background: transparent; color: var(--accent); border: 1px solid var(--accent); cursor: pointer; flex: 1; font-weight: bold; border-radius: 8px; }
 .btn-success { border-color: #00ff88; color: #00ff88; }
+
+@media (max-width: 700px) {
+    .account-create-form, .account-row { grid-template-columns: 1fr; }
+    .account-create-form .btn { width: 100%; }
+    .app-toolbar { flex-wrap: wrap; }
+    .connection-status { width: 100%; }
+    .history-row { grid-template-columns: 1fr; gap: 8px; }
+    .cloud-settings-form { grid-template-columns: 1fr; }
+    .cloud-settings-form label { grid-column: auto; }
+}
 
 /* --- EXACT PRINT REPLICA (8.5 x 13 inches) --- */
 @media print {
