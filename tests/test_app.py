@@ -1,7 +1,10 @@
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
+
+from openpyxl import load_workbook
 
 from app import ADMIN_PASSWORD, ADMIN_USERNAME, create_app, resolve_data_dir
 
@@ -141,37 +144,117 @@ class LocalServerTests(unittest.TestCase):
         history = self.client.get("/api/estimates", base_url=self.base_url)
         self.assertTrue(history.json["estimates"][0]["deleted"])
 
-    def test_pdf_download_requires_login_and_returns_pdf(self):
-        record = {
-            "id": "pdf-1",
-            "data": {
-                "date": "Jan 2",
-                "clientName": "Client <script>",
-                "works": [{"desc": "Repair", "labor": 100, "parts": 20}],
-                "totLabor": 100,
-                "totParts": 20,
-                "downpayment": 0,
-                "totDue": 120,
-            },
-        }
-        self.assertEqual(
-            self.client.get("/api/estimates/pdf-1/pdf", base_url=self.base_url).status_code,
-            401,
-        )
+    def test_synced_estimate_is_saved_as_printable_excel(self):
         self.assertEqual(self.login().status_code, 200)
-        self.client.put(
-            "/api/estimates/pdf-1",
+        response = self.client.put(
+            "/api/estimates/excel-1",
             base_url=self.base_url,
             json={
-                "id": "pdf-1",
+                "id": "excel-1",
                 "updatedAt": "2026-02-01T00:00:00.000Z",
-                "data": record["data"],
+                "data": {
+                    "orgPrefix": "MGO Taal",
+                    "makeModel": "Toyota Hilux",
+                    "plateNo": "ABC-123",
+                    "works": [
+                        {"desc": "*parts", "labor": "", "parts": ""},
+                        {"desc": "nut", "labor": 100, "parts": 0},
+                        {"desc": "2. bolt", "labor": 200, "parts": 0},
+                        {"desc": "*Tinsmith", "labor": "", "parts": ""},
+                        {"desc": "side panel", "labor": 300, "parts": 0},
+                        {"desc": "left panel", "labor": "", "parts": 0},
+                    ],
+                    "bundleLabor": True,
+                    "bundleAllPrices": False,
+                    "totLabor": 600,
+                    "totParts": 0,
+                    "downpayment": 100,
+                    "totDue": 500,
+                },
             },
         )
-        response = self.client.get("/api/estimates/pdf-1/pdf", base_url=self.base_url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/pdf")
-        self.assertTrue(response.data.startswith(b"%PDF"))
+        self.assertTrue(response.json["accepted"])
+        estimate_dir = (
+            Path(self.temporary_directory.name)
+            / "estimates"
+            / sha256(b"excel-1").hexdigest()
+        )
+        workbook_path = estimate_dir / "MGO TAAL_TOYOTA HILUX_ABC-123.xlsx"
+        self.assertTrue(workbook_path.exists())
+        workbook = load_workbook(workbook_path)
+        sheet = workbook["Job Estimate"]
+        values = [cell.value for row in sheet.iter_rows() for cell in row if cell.value]
+        self.assertIn("1. NUT", values)
+        self.assertIn("2. BOLT", values)
+        self.assertIn("1. SIDE PANEL", values)
+        self.assertIn("*PARTS", values)
+        self.assertIn("*TINSMITH", values)
+        self.assertEqual(str(sheet.page_setup.paperSize), "14")
+        self.assertEqual(sheet.column_dimensions["A"].width, 25)
+        self.assertEqual(sheet.column_dimensions["B"].width, 25)
+        self.assertEqual(sheet.column_dimensions["C"].width, 25)
+        self.assertEqual(sheet.column_dimensions["D"].width, 25)
+        self.assertEqual(sheet["A17"].alignment.horizontal, "left")
+        self.assertEqual(sheet["C18"].alignment.horizontal, "right")
+        self.assertEqual(sheet["A17"].border.left.style, "thin")
+        self.assertEqual(sheet["D18"].border.right.style, "thin")
+        self.assertIn("C21:C22", {str(merged) for merged in sheet.merged_cells.ranges})
+        self.assertEqual(len(sheet._images), 3)
+        self.assertEqual(round(sheet._images[1].anchor.ext.cy / 9525), 65)
+        self.assertEqual(round(sheet._images[2].anchor.ext.cy / 9525), 65)
+        self.assertEqual(
+            sheet._images[1].anchor._from.colOff + sheet._images[1].anchor.ext.cx // 2,
+            sheet._images[2].anchor._from.colOff + sheet._images[2].anchor.ext.cx // 2,
+        )
+        self.assertGreaterEqual(len(list(estimate_dir.glob("*.xlsx"))), 1)
+        update = self.client.put(
+            "/api/estimates/excel-1",
+            base_url=self.base_url,
+            json={
+                "id": "excel-1",
+                "updatedAt": "2026-02-02T00:00:00.000Z",
+                "data": {
+                    **response.json["estimate"]["data"],
+                    "makeModel": "Toyota Prius",
+                },
+            },
+        )
+        self.assertEqual(update.status_code, 200)
+        self.assertFalse(workbook_path.exists())
+        self.assertTrue((estimate_dir / "MGO TAAL_TOYOTA PRIUS_ABC-123.xlsx").exists())
+        self.assertEqual(
+            self.client.get("/api/estimates/excel-1/pdf", base_url=self.base_url).status_code,
+            404,
+        )
+        bundled = self.client.put(
+            "/api/estimates/bundle-1",
+            base_url=self.base_url,
+            json={
+                "id": "bundle-1",
+                "updatedAt": "2026-02-03T00:00:00.000Z",
+                "data": {
+                    "works": [
+                        {"desc": "first repair", "labor": 100, "parts": 20},
+                        {"desc": "second repair", "labor": 200, "parts": 30},
+                    ],
+                    "bundleLabor": True,
+                    "bundleAllPrices": True,
+                },
+            },
+        )
+        self.assertEqual(bundled.status_code, 200)
+        bundled_dir = (
+            Path(self.temporary_directory.name)
+            / "estimates"
+            / sha256(b"bundle-1").hexdigest()
+        )
+        bundled_workbook = load_workbook(bundled_dir / "PRIVATE_UNKNOWN VEHICLE_NO PLATE.xlsx")
+        bundled_sheet = bundled_workbook["Job Estimate"]
+        self.assertEqual(bundled_sheet["C17"].value, 300)
+        self.assertEqual(bundled_sheet["D17"].value, 50)
+        self.assertIn("C17:C18", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
+        self.assertIn("D17:D18", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
 
 
 if __name__ == "__main__":

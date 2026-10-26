@@ -1,3 +1,4 @@
 Flask>=3.1,<4
 cryptography>=44,<47
-reportlab>=4.2,<5
+openpyxl>=3.1,<4
+pillow>=10,<13

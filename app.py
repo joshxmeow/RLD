@@ -1,24 +1,25 @@
 import json
-import math
+import hashlib
 import os
 import re
 import secrets
 import socket
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from functools import wraps
-from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory, session
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from flask import Flask, abort, jsonify, request, send_from_directory, session
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.worksheet.page import PageMargins
 from werkzeug.security import check_password_hash, generate_password_hash
-from werkzeug.utils import secure_filename
 
 ROOT = Path(__file__).resolve().parent
 STORAGE_CONFIG_PATH = ROOT / "storage-config.json"
@@ -378,90 +379,382 @@ def create_app(database_path=None, secret_key=None):
             saved = connection.execute(
                 "SELECT * FROM estimates WHERE id = ?", (estimate_id,)
             ).fetchone()
+        if not deleted:
+            try:
+                save_estimate_workbook(estimate_record(saved), data_dir)
+            except (OSError, ValueError) as error:
+                app.logger.exception("Could not write the estimate workbook for %s", estimate_id)
+                return jsonify(
+                    error=f"Estimate saved on the server, but its Excel file could not be written: {error}"
+                ), 500
         return jsonify(accepted=True, estimate=estimate_record(saved))
-
-    @app.get("/api/estimates/<estimate_id>/pdf")
-    @login_required
-    def estimate_pdf(estimate_id):
-        with database_connection(app.config["DATABASE"]) as connection:
-            row = connection.execute(
-                "SELECT * FROM estimates WHERE id = ? AND deleted = 0", (estimate_id,)
-            ).fetchone()
-        if row is None:
-            abort(404, description="Estimate not found.")
-        record = estimate_record(row)
-        pdf = make_estimate_pdf(record)
-        client = secure_filename(str(record["data"].get("clientName", "Estimate"))) or estimate_id
-        date = secure_filename(str(record["data"].get("date", "Estimate"))) or "Estimate"
-        filename = f"{date}-{client}.pdf"
-        return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
 
     return app
 
 
-def make_estimate_pdf(record):
-    data = record["data"]
-    output = BytesIO()
-    document = SimpleDocTemplate(
-        output, pagesize=letter, rightMargin=0.55 * inch, leftMargin=0.55 * inch,
-        topMargin=0.55 * inch, bottomMargin=0.55 * inch,
-    )
-    styles = getSampleStyleSheet()
-    story = [
-        Paragraph("RLD AUTOWORX AND TOWING SERVICES", styles["Title"]),
-        Paragraph("JOB ESTIMATE", styles["Heading2"]),
-        Spacer(1, 10),
-    ]
-    fields = [
-        ["Date", data.get("date", "")],
-        ["Client", data.get("clientName", "")],
-        ["Address", data.get("address", "")],
-        ["Contact", data.get("contact", "")],
-        ["Vehicle", data.get("makeModel", "")],
-        ["Plate No.", data.get("plateNo", "")],
-        ["Chassis No.", data.get("chassisNo", "")],
-        ["Engine No.", data.get("engineNo", "")],
-        ["Color", data.get("color", "")],
-        ["Insurance", data.get("insurance", "")],
-    ]
-    details = Table(fields, colWidths=[1.4 * inch, 5.5 * inch])
-    details.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("PADDING", (0, 0), (-1, -1), 6),
-    ]))
-    story.extend([details, Spacer(1, 14)])
-    works = [["Scope of Works", "Labor", "Parts"]]
-    for item in data.get("works", []) if isinstance(data.get("works", []), list) else []:
+def estimate_filename_component(value, fallback):
+    component = str(value or "").strip().upper()
+    component = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", component).rstrip(" .")
+    component = component[:80].rstrip(" .")
+    if not component:
+        component = fallback
+    if component.split(".", 1)[0] in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }:
+        component = f"_{component}"
+    return component
+
+
+def estimate_workbook_filename(data):
+    organization = estimate_filename_component(data.get("orgPrefix"), "PRIVATE")
+    make_model = estimate_filename_component(data.get("makeModel"), "UNKNOWN VEHICLE")
+    plate_number = estimate_filename_component(data.get("plateNo"), "NO PLATE")
+    return f"{organization}_{make_model}_{plate_number}.xlsx"
+
+
+def estimate_work_rows(data):
+    rows = []
+    number = 1
+    works = data.get("works", [])
+    if not isinstance(works, list):
+        return rows
+    for item in works:
         if not isinstance(item, dict):
             continue
-        works.append([item.get("desc", ""), item.get("labor", ""), item.get("parts", "")])
-    work_table = Table(works, colWidths=[4.2 * inch, 1.35 * inch, 1.35 * inch], repeatRows=1)
-    work_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9edf7")),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("PADDING", (0, 0), (-1, -1), 6),
-    ]))
-    def amount(value):
-        try:
-            number = float(value or 0)
-        except (TypeError, ValueError):
-            return 0
-        return number if math.isfinite(number) else 0
+        description = str(item.get("desc", "")).strip()
+        if not description:
+            continue
+        if description.startswith("*"):
+            rows.append((description.upper(), item.get("labor", ""), item.get("parts", "")))
+            number = 1
+            continue
+        description = re.sub(r"^\d+\.\s*", "", description)
+        rows.append((f"{number}. {description.upper()}", item.get("labor", ""), item.get("parts", "")))
+        number += 1
+    return rows
 
-    story.extend([
-        work_table, Spacer(1, 14),
-        Paragraph(f"Total Labor: PHP {amount(data.get('totLabor')):,.2f}", styles["Normal"]),
-        Paragraph(f"Total Parts: PHP {amount(data.get('totParts')):,.2f}", styles["Normal"]),
-        Paragraph(f"Downpayment: PHP {amount(data.get('downpayment')):,.2f}", styles["Normal"]),
-        Paragraph(f"Total Amount Due: PHP {amount(data.get('totDue')):,.2f}", styles["Heading3"]),
-    ])
-    document.build(story)
-    output.seek(0)
-    return output
+
+def estimate_work_rows_with_sections(data):
+    rows = []
+    sections = []
+    number = 1
+    section_start = 0
+    is_parts_section = False
+    works = data.get("works", [])
+    if not isinstance(works, list):
+        return rows, sections
+
+    def finish_section(end):
+        nonlocal section_start
+        if end > section_start:
+            sections.append((section_start, end, is_parts_section))
+        section_start = end
+
+    for item in works:
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("desc", "")).strip()
+        if not description:
+            continue
+        if description.startswith("*"):
+            finish_section(len(rows))
+            rows.append((description.upper(), item.get("labor", ""), item.get("parts", "")))
+            section_start = len(rows)
+            is_parts_section = description.upper().replace(" ", "") == "*PARTS"
+            number = 1
+            continue
+        description = re.sub(r"^\d+\.\s*", "", description)
+        rows.append((f"{number}. {description.upper()}", item.get("labor", ""), item.get("parts", "")))
+        number += 1
+    finish_section(len(rows))
+    return rows, sections
+
+
+def clean_excel_amount(value):
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return float(value)
+    cleaned = re.sub(r"[^0-9.\-]", "", str(value or ""))
+    try:
+        return float(cleaned) if cleaned else 0
+    except ValueError:
+        return 0
+
+
+def excel_has_value(value):
+    return value is not None and str(value).strip() != ""
+
+
+def apply_merged_border(sheet, first_row, last_row, column, side):
+    for row in range(first_row, last_row + 1):
+        sheet.cell(row, column).border = Border(
+            left=side,
+            right=side,
+            top=side if row == first_row else Side(style=None),
+            bottom=side if row == last_row else Side(style=None),
+        )
+
+
+def save_estimate_workbook(record, data_dir):
+    data = record["data"]
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Job Estimate"
+    sheet.sheet_view.showGridLines = False
+    for column in ("A", "B", "C", "D"):
+        sheet.column_dimensions[column].width = 25
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "portrait"
+    # Excel paper code 14 is Folio, matching the browser's 8.5 x 13-inch print page.
+    sheet.page_setup.paperSize = "14"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 1
+    sheet.page_margins = PageMargins(left=0.4, right=0.4, top=0.3, bottom=0.3, header=0, footer=0)
+    sheet.print_options.horizontalCentered = True
+
+    thin_black = Side(style="thin", color="000000")
+    grid = Border(left=thin_black, right=thin_black, top=thin_black, bottom=thin_black)
+    centered = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    bold = Font(name="Arial", size=9, bold=True)
+    normal = Font(name="Arial", size=8, bold=True)
+
+    banner_path = ROOT / "header.png"
+    if banner_path.exists():
+        banner = ExcelImage(str(banner_path))
+        original_width, original_height = banner.width, banner.height
+        scale = min(700 / original_width, 80 / original_height)
+        banner.width = round(original_width * scale)
+        banner.height = round(original_height * scale)
+        banner.anchor = OneCellAnchor(
+            _from=AnchorMarker(
+                col=0,
+                row=0,
+                colOff=pixels_to_EMU(10),
+                rowOff=pixels_to_EMU(9),
+            ),
+            ext=XDRPositiveSize2D(
+                cx=pixels_to_EMU(banner.width),
+                cy=pixels_to_EMU(banner.height),
+            ),
+        )
+        sheet.add_image(banner)
+    sheet.row_dimensions[1].height = 60
+    for row, value, size in (
+        (2, "RLD AUTOWORX AND TOWING SERVICES", 12),
+        (3, "Brgy. Buli, Taal, Batangas", 9),
+        (4, "Contact No: 09296462336/09267433265/(043)321-8477", 9),
+        (5, "Email: rldcarpaintingservices@yahoo.com", 9),
+        (6, "TIN NO: 287-920-998-000", 9),
+    ):
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = sheet.cell(row, 1, value)
+        cell.font = Font(name="Arial", size=size, bold=True)
+        cell.alignment = centered
+
+    sheet.merge_cells("A8:D8")
+    sheet["A8"] = "JOB ESTIMATE"
+    sheet["A8"].font = Font(name="Arial", size=12, bold=True)
+    sheet["A8"].alignment = centered
+    sheet["A9"] = f"DATE: {data.get('date', '')}"
+    sheet.merge_cells("A9:D9")
+    sheet["A9"].font = bold
+    sheet["A9"].alignment = right
+
+    sheet.merge_cells("A11:B11")
+    sheet.merge_cells("C11:D11")
+    sheet["A11"] = "CLIENT"
+    sheet["C11"] = "VEHICLE"
+    for column in range(1, 5):
+        sheet.cell(11, column).font = bold
+        sheet.cell(11, column).alignment = centered
+        sheet.cell(11, column).border = grid
+
+    details = [
+        (f"NAME: {data.get('clientName', '')}", f"MAKE & MODEL: {data.get('makeModel', '')}", f"PLATE NO.: {data.get('plateNo', '')}"),
+        (f"ADDRESS: {data.get('address', '')}", f"CHASSIS NO: {data.get('chassisNo', '')}", f"ENGINE NO.: {data.get('engineNo', '')}"),
+        (f"CONTACT NUMBER: {data.get('contact', '')}", f"COLOR: {data.get('color', '')}", f"INSURANCE.: {data.get('insurance', '')}"),
+    ]
+    detail_column_widths = (50, 25, 25)
+    for row_index, values in enumerate(details, start=12):
+        sheet.merge_cells(start_row=row_index, start_column=1, end_row=row_index, end_column=2)
+        for column, value in ((1, values[0]), (3, values[1]), (4, values[2])):
+            cell = sheet.cell(row_index, column, value)
+            cell.font = normal
+            cell.alignment = left
+        for column in range(1, 5):
+            sheet.cell(row_index, column).border = grid
+        lines = max(
+            max(1, (len(str(value)) + width - 1) // width)
+            for value, width in zip(values, detail_column_widths)
+        )
+        sheet.row_dimensions[row_index].height = max(16, lines * 12)
+
+    work_header_row = 16
+    sheet.merge_cells(start_row=work_header_row, start_column=1, end_row=work_header_row, end_column=2)
+    for column, value in ((1, "SCOPE OF WORKS"), (3, "COST OF LABOR"), (4, "COST OF PARTS")):
+        cell = sheet.cell(work_header_row, column, value)
+        cell.font = bold
+        cell.alignment = centered
+    for column in range(1, 5):
+        sheet.cell(work_header_row, column).border = grid
+    row_index = work_header_row + 1
+    work_rows, work_sections = estimate_work_rows_with_sections(data)
+    work_row_start = row_index
+    for description, labor, parts in work_rows:
+        sheet.merge_cells(start_row=row_index, start_column=1, end_row=row_index, end_column=2)
+        for column, value in ((1, description), (3, labor), (4, parts)):
+            cell = sheet.cell(row_index, column, value)
+            cell.font = bold if description.startswith("*") else normal
+            cell.alignment = left if column == 1 else right
+            if column in (3, 4) and isinstance(value, (int, float)):
+                cell.number_format = '"PHP " #,##0.00'
+        for column in range(1, 5):
+            sheet.cell(row_index, column).border = grid
+        sheet.row_dimensions[row_index].height = 16
+        row_index += 1
+
+    bundle_all_prices = data.get("bundleAllPrices", False) is True
+    bundle_labor = data.get("bundleLabor", True) is True
+    for section_start, section_end, is_parts_section in work_sections:
+        if section_end - section_start < 2:
+            continue
+        first_sheet_row = work_row_start + section_start
+        last_sheet_row = work_row_start + section_end - 1
+        if bundle_all_prices:
+            for column, cost_index in ((3, 1), (4, 2)):
+                section_values = [work_rows[index][cost_index] for index in range(section_start, section_end)]
+                total = sum(clean_excel_amount(value) for value in section_values)
+                if total == 0:
+                    continue
+                sheet.cell(first_sheet_row, column, total)
+                sheet.cell(first_sheet_row, column).number_format = '"PHP " #,##0.00'
+                sheet.merge_cells(
+                    start_row=first_sheet_row, start_column=column,
+                    end_row=last_sheet_row, end_column=column
+                )
+                apply_merged_border(sheet, first_sheet_row, last_sheet_row, column, thin_black)
+        elif bundle_labor and not is_parts_section:
+            labor_values = [
+                work_rows[index][1] for index in range(section_start, section_end)
+                if excel_has_value(work_rows[index][1])
+            ]
+            if len(labor_values) == 1:
+                sheet.cell(first_sheet_row, 3, clean_excel_amount(labor_values[0]))
+                sheet.cell(first_sheet_row, 3).number_format = '"PHP " #,##0.00'
+                sheet.merge_cells(
+                    start_row=first_sheet_row, start_column=3,
+                    end_row=last_sheet_row, end_column=3
+                )
+                apply_merged_border(sheet, first_sheet_row, last_sheet_row, 3, thin_black)
+
+    totals = [
+        ("TOTAL LABOR/MATERIALS/PARTS:", data.get("totLabor", 0), data.get("totParts", 0)),
+        ("DOWNPAYMENT:", data.get("downpayment", 0), None),
+        ("TOTAL AMOUNT DUE:", data.get("totDue", 0), None),
+    ]
+    for label, first_value, second_value in totals:
+        sheet.merge_cells(start_row=row_index, start_column=1, end_row=row_index, end_column=2)
+        sheet.cell(row_index, 1, label)
+        for column, value in ((3, first_value), (4, second_value)):
+            if value is not None:
+                cell = sheet.cell(row_index, column, value)
+                if isinstance(value, (int, float)):
+                    cell.number_format = '"PHP " #,##0.00'
+        if second_value is None:
+            sheet.merge_cells(start_row=row_index, start_column=3, end_row=row_index, end_column=4)
+        for column in range(1, 5):
+            sheet.cell(row_index, column).font = bold
+            sheet.cell(row_index, column).alignment = right
+            sheet.cell(row_index, column).border = grid
+        row_index += 1
+
+    row_index += 1
+    signatures = []
+    for image_name, column, label in (
+        ("signature1.png", 1, "PREPARED BY: BEVERLY BALATBAT"),
+        ("signature2.png", 3, "APPROVED BY: ROLDAN DUEÑAS"),
+    ):
+        image_path = ROOT / image_name
+        if image_path.exists():
+            signature = ExcelImage(str(image_path))
+            original_width, original_height = signature.width, signature.height
+            signature.height = 65
+            signature.width = round(original_width * signature.height / original_height)
+            center_offset = pixels_to_EMU(180) - pixels_to_EMU(signature.width) // 2
+            signature.anchor = OneCellAnchor(
+                _from=AnchorMarker(
+                    col=column - 1,
+                    row=row_index - 1,
+                    colOff=center_offset,
+                    rowOff=pixels_to_EMU(4),
+                ),
+                ext=XDRPositiveSize2D(
+                    cx=pixels_to_EMU(signature.width),
+                    cy=pixels_to_EMU(signature.height),
+                ),
+            )
+            sheet.add_image(signature)
+            signatures.append((column, label))
+    sheet.row_dimensions[row_index].height = 56
+    for column, label in signatures:
+        cell = sheet.cell(row_index + 1, column, label)
+        cell.value = label
+        cell.font = bold
+        cell.alignment = centered
+        sheet.merge_cells(
+            start_row=row_index + 1, start_column=column,
+            end_row=row_index + 1, end_column=column + 1
+        )
+        for border_column in range(column, column + 2):
+            sheet.cell(row_index + 1, border_column).border = Border(bottom=thin_black)
+    row_index += 2
+
+    terms = (
+        "I HEREBY AUTHORIZE AND AGREE TO PAY FOR THE ABOVE REPAIRS AND WORK TO BE DONE ON MY VEHICLE "
+        "INCLUDING ALL PARTS AND MATERIALS NECESSARY TO PERFORM THE SAME. I ALSO AGREE TO THE TERMS AND "
+        "CONDITION STATED BELOW:\n"
+        "1. RLD AUTOWORX & TOWING SERVICES will not be held responsible for any losses or damages to the vehicle "
+        "and its accessories or any articles of value left in the vehicle in case of theft, fire, accident or any "
+        "other cause beyond the auto center's control.\n"
+        "2. Customer acknowledges an expenses mechanic lien to secure the amount of repairs thereto.\n"
+        "3. Company employees may operate vehicle for purposes of testing inspection and /or deliver at customer's risk.\n"
+        "4. No claims for damages to vehicle under this repair order will be considered unless received by the company "
+        "within three (3) days after the vehicle has been delivered.\n"
+        "5. Customers agrees to pay interest at the rate of 3% per month on all accounts not paid when due.\n"
+        "6. RLD AUTOWORX & TOWING SERVICES will charge a daily storage fee of P300.00 on the vehicle from the day "
+        "enter on the repair shop if not yet started of repair of vehicle.\n"
+        "7. RLD AUTOWORX & TOWING SERVICES to charge a daily storage fee of P300.00 on the vehicle not claimed on "
+        "the date of upon completion of repair.\n"
+        "8. Hidden defects are not included in this evaluation\n"
+        "9. Prices are subject to change without prior notice."
+    )
+    sheet.merge_cells(start_row=row_index, start_column=1, end_row=row_index, end_column=4)
+    terms_cell = sheet.cell(row_index, 1, terms)
+    terms_cell.font = Font(name="Arial", size=5.5)
+    terms_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    sheet.row_dimensions[row_index].height = 175
+    sheet.print_area = f"A1:D{row_index}"
+
+    estimate_id = str(record["id"])
+    estimate_dir = Path(data_dir) / "estimates" / hashlib.sha256(estimate_id.encode("utf-8")).hexdigest()
+    estimate_dir.mkdir(parents=True, exist_ok=True)
+    destination = estimate_dir / estimate_workbook_filename(data)
+    with tempfile.NamedTemporaryFile(dir=estimate_dir, suffix=".xlsx", delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        workbook.save(temporary_path)
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    for old_file in estimate_dir.glob("*.xlsx"):
+        if old_file != destination:
+            old_file.unlink()
+    return destination
 
 
 def load_secret_key(data_dir):

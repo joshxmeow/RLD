@@ -41,6 +41,10 @@
         <option value="* GLASSMAN WORKS"></option>
         <option value="* TOWING FEE"></option>
     </datalist>
+    <datalist id="organizationSuggestions"></datalist>
+    <datalist id="vehicleSuggestions"></datalist>
+    <datalist id="jobKeywordSuggestions"></datalist>
+    <datalist id="insuranceSuggestions"></datalist>
 
     <div class="container" id="appContainer" hidden>
         <div class="app-toolbar no-print">
@@ -62,6 +66,7 @@
                 <span aria-hidden="true">↪</span> Sign out
             </button>
         </div>
+        <p id="installMessage" class="auth-message" role="status" aria-live="polite" hidden></p>
 
         <section id="estimatePage">
         <img src="header.png" alt="RLD Banner" class="print-banner">
@@ -78,12 +83,12 @@
         <form id="estimateForm">
             <div class="filename-setup no-print">
                 <div class="setup-row">
-                    <label>Organization / Fleet:</label>
-                    <input type="text" id="orgPrefix" placeholder="e.g. MGO TAAL, BRGY BULI (Leave blank if private)">
+                    <label>Government / Organization / Fleet:</label>
+                    <input type="text" id="orgPrefix" list="organizationSuggestions" placeholder="e.g. MGO TAAL, BRGY BULI (Leave blank if private)">
                 </div>
                 <div class="setup-row">
                     <label>Job Keyword for File:</label>
-                    <input type="text" id="fileSuffix" placeholder="e.g. SHOCK, TOWING, COLLISION">
+                    <input type="text" id="fileSuffix" list="jobKeywordSuggestions" placeholder="e.g. SHOCK, TOWING, COLLISION">
                 </div>
             </div>
 
@@ -91,7 +96,7 @@
                 <div class="doc-title">JOB ESTIMATE</div>
                 <div class="doc-date">
                     <label>DATE:</label>
-                    <input type="text" id="date" placeholder="e.g. October 25, 2026" required class="inline-input">
+                    <input type="date" id="date" class="inline-input" aria-label="Estimate date">
                 </div>
             </div>
 
@@ -102,7 +107,7 @@
                 </tr>
                 <tr>
                     <td><div class="cell-flex"><label>NAME:</label> <input type="text" id="clientName"></div></td>
-                    <td style="width: 27%;"><div class="cell-flex"><label>MAKE & MODEL:</label> <input type="text" id="makeModel"></div></td>
+                    <td style="width: 27%;"><div class="cell-flex"><label>MAKE & MODEL:</label> <input type="text" id="makeModel" list="vehicleSuggestions"></div></td>
                     <td style="width: 28%;"><div class="cell-flex"><label>PLATE NO.:</label> <input type="text" id="plateNo"></div></td>
                 </tr>
                 <tr>
@@ -113,7 +118,7 @@
                 <tr>
                     <td><div class="cell-flex"><label>CONTACT NUMBER:</label> <input type="text" id="contact"></div></td>
                     <td><div class="cell-flex"><label>COLOR:</label> <input type="text" id="color"></div></td>
-                    <td><div class="cell-flex"><label>INSURANCE.:</label> <input type="text" id="insurance"></div></td>
+                    <td><div class="cell-flex"><label>INSURANCE.:</label> <input type="text" id="insurance" list="insuranceSuggestions"></div></td>
                 </tr>
             </table>
 
@@ -189,15 +194,19 @@
             </div>
 
             <div class="buttons no-print">
-                <button type="button" class="btn btn-success" onclick="window.print()">PRINT DOCUMENT</button>
+                <button type="button" class="btn btn-success" id="printBtn">PRINT DOCUMENT</button>
                 <button type="button" class="btn" id="saveBtn">SAVE</button>
+                <button type="button" class="btn" id="clearEntryBtn">CLEAR ENTRY</button>
             </div>
+            <p id="estimateMessage" class="auth-message no-print" role="status" aria-live="polite"></p>
         </form>
         </section>
 
         <section id="historyPage" class="admin-panel no-print" hidden>
             <h1>Estimate history</h1>
-            <p class="auth-help">Saved estimates stay on this device while offline and sync with the Windows server when it is reachable.</p>
+            <p class="auth-help">Saved estimates stay on this device while offline and sync with the Windows server when it is reachable. Synced estimates are saved there as Excel files formatted for printing.</p>
+            <label class="history-search-label" for="historySearch">Search estimates</label>
+            <input type="search" id="historySearch" placeholder="Search organization, vehicle, plate, date, or user">
             <div id="historyList"></div>
             <p id="historyMessage" class="auth-message" role="status" aria-live="polite"></p>
         </section>

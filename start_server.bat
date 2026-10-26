@@ -11,7 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
-".venv\Scripts\python.exe" -c "import flask, cryptography, reportlab" >nul 2>nul
+".venv\Scripts\python.exe" -c "import flask, cryptography, openpyxl, PIL" >nul 2>nul
 if errorlevel 1 (
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt
     if errorlevel 1 (

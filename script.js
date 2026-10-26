@@ -170,6 +170,32 @@ function writeEstimates(estimates) {
     localStorage.setItem(ESTIMATES_KEY, JSON.stringify(estimates));
 }
 
+function refreshEstimateSuggestions() {
+    const suggestions = {
+        orgPrefix: "organizationSuggestions",
+        makeModel: "vehicleSuggestions",
+        fileSuffix: "jobKeywordSuggestions",
+        insurance: "insuranceSuggestions"
+    };
+    const estimates = readEstimates()
+        .filter(estimate => !estimate.deleted)
+        .sort((a, b) => new Date(b.updatedAt || b.savedAt) - new Date(a.updatedAt || a.savedAt));
+    Object.entries(suggestions).forEach(([field, listId]) => {
+        const values = new Map();
+        estimates.forEach(estimate => {
+            const value = String(estimate.data && estimate.data[field] || "").trim();
+            const key = value.toLocaleLowerCase();
+            if (value && !values.has(key)) values.set(key, value);
+        });
+        const list = document.getElementById(listId);
+        list.replaceChildren(...Array.from(values.values(), value => {
+            const option = document.createElement("option");
+            option.value = value;
+            return option;
+        }));
+    });
+}
+
 function showLogin() {
     authShell.hidden = false;
     appContainer.hidden = true;
@@ -551,7 +577,27 @@ async function syncPendingEstimates() {
 }
 
 function getHistoryTitle(estimate) {
-    return estimate.data.clientName || estimate.data.fileSuffix || "Untitled estimate";
+    const data = estimate.data || {};
+    const organization = estimateFilenameComponent(data.orgPrefix, "PRIVATE");
+    const makeModel = estimateFilenameComponent(data.makeModel, "UNKNOWN VEHICLE");
+    const plateNumber = estimateFilenameComponent(data.plateNo, "NO PLATE");
+    return `${organization}_${makeModel}_${plateNumber}.xlsx`;
+}
+
+function estimateFilenameComponent(value, fallback) {
+    let component = String(value || "").trim().toUpperCase()
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
+        .replace(/[ .]+$/g, "")
+        .slice(0, 80)
+        .replace(/[ .]+$/g, "");
+    const reservedNames = new Set([
+        "CON", "PRN", "AUX", "NUL",
+        ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
+        ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`)
+    ]);
+    if (!component) component = fallback;
+    if (reservedNames.has(component.split(".", 1)[0])) component = `_${component}`;
+    return component;
 }
 
 function getStatusLabel(estimate) {
@@ -577,15 +623,25 @@ function renderHistory() {
     const list = document.getElementById("historyList");
     list.replaceChildren();
     let estimates;
+    const searchTerm = document.getElementById("historySearch").value.trim().toLocaleUpperCase();
     try {
         estimates = readEstimates().filter(item => !item.deleted || item.syncStatus === "error")
-            .sort((a, b) => new Date(b.updatedAt || b.savedAt) - new Date(a.updatedAt || a.savedAt));
+            .sort((a, b) => new Date(b.updatedAt || b.savedAt) - new Date(a.updatedAt || a.savedAt))
+            .filter(estimate => {
+                if (!searchTerm) return true;
+                const searchableText = [
+                    getHistoryTitle(estimate),
+                    estimate.data.date,
+                    estimate.username
+                ].join(" ").toLocaleUpperCase();
+                return searchableText.includes(searchTerm);
+            });
     } catch (error) {
         list.textContent = `Could not load estimate history: ${error.message}`;
         return;
     }
     if (estimates.length === 0) {
-        list.textContent = "No saved estimates yet.";
+        list.textContent = searchTerm ? "No estimates match your search." : "No saved estimates yet.";
         return;
     }
     estimates.forEach(estimate => {
@@ -625,15 +681,6 @@ function renderHistory() {
         edit.textContent = "Edit";
         edit.addEventListener("click", () => editEstimate(estimate));
         row.appendChild(edit);
-        if (estimate.syncStatus === "synced") {
-            const open = document.createElement("a");
-            open.className = "request-button history-action";
-            open.href = apiUrl(`/api/estimates/${encodeURIComponent(estimate.id)}/pdf`);
-            open.target = "_blank";
-            open.rel = "noopener";
-            open.textContent = "Download PDF";
-            row.appendChild(open);
-        }
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "request-button reject-button history-action";
@@ -649,27 +696,45 @@ function loadHistory() {
     checkServerSession();
 }
 
+document.getElementById("historySearch").addEventListener("input", renderHistory);
+
 function editEstimate(estimate) {
     const data = estimate.data;
     ["date", "orgPrefix", "clientName", "address", "contact", "makeModel", "plateNo", "chassisNo", "engineNo", "color", "insurance", "fileSuffix", "downpayment"].forEach(id => {
         const value = data[id];
         document.getElementById(id).value = value === undefined || value === null ? "" : value;
     });
+    if (data.date && document.getElementById("date").value !== data.date) {
+        const parsedDate = new Date(data.date);
+        document.getElementById("date").value = Number.isNaN(parsedDate.getTime())
+            ? ""
+            : `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}-${String(parsedDate.getDate()).padStart(2, "0")}`;
+    }
+    document.getElementById("bundleLabor").checked = data.bundleLabor !== false;
+    document.getElementById("bundleAllPrices").checked = data.bundleAllPrices === true;
     const tbody = document.getElementById("worksBody");
     tbody.replaceChildren();
     (data.works || []).forEach(work => {
         addRow();
         const row = tbody.lastElementChild;
-        row.querySelector(".works-input").value = work.desc;
+        const description = String(work.desc || "").trim();
+        row.querySelector(".works-input").value = description.startsWith("*")
+            ? description
+            : description.replace(/^\d+\.\s*/, "");
         row.querySelector(".labor-cost").value = work.labor ? formatPHP(Number(work.labor)) : "";
         row.querySelector(".parts-cost").value = work.parts ? formatPHP(Number(work.parts)) : "";
     });
     addRow();
+    updateWorkNumbers();
     calc();
     editingEstimateId = estimate.id;
     document.getElementById("saveBtn").textContent = "UPDATE";
     document.getElementById("historyMessage").textContent = `Editing ${getHistoryTitle(estimate)}.`;
     showPage("estimate");
+}
+
+function getLocalDateString(date = new Date()) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function deleteEstimate(estimate) {
@@ -731,12 +796,15 @@ window.addEventListener("beforeinstallprompt", event => {
     event.preventDefault();
     installPromptEvent = event;
     document.getElementById("installAppBtn").hidden = false;
+    document.getElementById("installMessage").hidden = true;
 });
 
 document.getElementById("installAppBtn").addEventListener("click", async () => {
     if (!installPromptEvent) {
-        document.getElementById("historyMessage").textContent =
-            "On iPhone, open the Share menu in Safari and choose Add to Home Screen. On Android, use the browser menu and choose Install app.";
+        const message = document.getElementById("installMessage");
+        message.textContent =
+            "To install, use your browser menu and choose Install app or Add to Home screen. If that option is missing, first trust the RLD server certificate and reload this page. On iPhone, use Safari's Share menu.";
+        message.hidden = false;
         return;
     }
     try {
@@ -744,16 +812,23 @@ document.getElementById("installAppBtn").addEventListener("click", async () => {
         await installPromptEvent.userChoice;
         installPromptEvent = null;
         document.getElementById("installAppBtn").hidden = true;
+        document.getElementById("installMessage").hidden = true;
     } catch (error) {
-        document.getElementById("historyMessage").textContent = `Could not start installation: ${error.message}`;
+        const message = document.getElementById("installMessage");
+        message.textContent = `Could not start installation: ${error.message}`;
+        message.hidden = false;
     }
 });
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("service-worker.js").catch(error => {
-        const message = `Offline app setup failed: ${error.message}`;
+    navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" }).catch(error => {
+        const message = `Offline setup failed: ${error.message}. Check that this phone trusts the RLD server certificate, then reload the app.`;
         if (appContainer.hidden) setAuthMessage(message);
-        else document.getElementById("historyMessage").textContent = message;
+        else {
+            const installMessage = document.getElementById("installMessage");
+            installMessage.textContent = message;
+            installMessage.hidden = false;
+        }
     });
 }
 
@@ -762,6 +837,7 @@ if (window.matchMedia("(display-mode: standalone)").matches || navigator.standal
 }
 window.addEventListener("appinstalled", () => {
     document.getElementById("installAppBtn").hidden = true;
+    document.getElementById("installMessage").hidden = true;
 });
 window.setInterval(checkServerSession, 15000);
 document.addEventListener("visibilitychange", () => {
@@ -841,26 +917,21 @@ document.getElementById('worksBody').addEventListener('input', function(e) {
     }
     
     const rows = this.querySelectorAll('tr:not(.print-pad-row)');
-    let itemCounter = 1;
     let isLastRowFilled = false;
 
     rows.forEach((row, index) => {
         const input = row.querySelector('.works-input');
-        const numSpan = row.querySelector('.row-num');
-        const val = input.value.trim().toUpperCase();
-
-        const td1 = row.children[0];
-        const td2 = row.children[1];
-        const td3 = row.children[2];
         if (index === rows.length - 1) {
             const lab = row.querySelector('.labor-cost').value;
             const part = row.querySelector('.parts-cost').value;
+            const val = input.value.trim();
             if (val !== '' || lab !== '' || part !== '') {
                 isLastRowFilled = true;
             }
         }
     });
 
+    updateWorkNumbers();
     if (isLastRowFilled) {
         addRow();
     }
@@ -898,6 +969,30 @@ function addRow() {
         <td><input type="text" class="cost-input parts-cost"></td>
     `;
     tbody.appendChild(tr);
+}
+
+function updateWorkNumbers() {
+    let number = 1;
+    document.querySelectorAll('#worksBody tr:not(.print-pad-row)').forEach(row => {
+        const description = row.querySelector('.works-input').value.trim();
+        const numberLabel = row.querySelector('.row-num');
+        const workInput = row.querySelector('.works-input');
+        if (description.startsWith('*')) {
+            numberLabel.textContent = '';
+            row.classList.remove('numbered-work-row');
+            workInput.classList.remove('numbered-work');
+            number = 1;
+        } else if (description) {
+            numberLabel.textContent = `${number}.`;
+            row.classList.add('numbered-work-row');
+            workInput.classList.add('numbered-work');
+            number += 1;
+        } else {
+            numberLabel.textContent = '';
+            row.classList.remove('numbered-work-row');
+            workInput.classList.remove('numbered-work');
+        }
+    });
 }
 
 function mergeSingleCostsForPrint() {
@@ -976,28 +1071,85 @@ function mergeSingleCostsForPrint() {
     mergeSection();
 }
 
-// --- PRINT ROW PADDING ---
+// --- PRINT SUPPORT ---
 window.addEventListener('beforeprint', () => {
-    const tbody = document.getElementById('worksBody');
     mergeSingleCostsForPrint();
-
-    for (let i = 0; i < 2; i++) {
-        const tr = document.createElement('tr');
-        tr.className = 'print-pad-row'; 
-        tr.innerHTML = `
-            <td><div style="height: 16px;"></div></td>
-            <td></td>
-            <td></td>
-        `;
-        tbody.appendChild(tr);
-    }
 });
 
-window.addEventListener('afterprint', () => {
+function cleanupPrintLayout() {
     document.querySelectorAll('.print-pad-row').forEach(row => row.remove());
     document.querySelectorAll('.print-merged-cell').forEach(cell => cell.remove());
     document.querySelectorAll('.print-merged-source').forEach(cell => cell.classList.remove('print-merged-source'));
-});
+}
+
+window.addEventListener('afterprint', cleanupPrintLayout);
+document.getElementById("printBtn").addEventListener("click", printEstimate);
+
+function printEstimate() {
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
+        navigator.standalone === true;
+    const isPhone = /Android|iPhone|iPod|iPad/i.test(navigator.userAgent);
+    if (!isStandalone || !isPhone) {
+        window.print();
+        return;
+    }
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+        document.getElementById("estimateMessage").textContent =
+            "The browser blocked the print window. Open this app in your browser and tap Print Document again.";
+        window.print();
+        return;
+    }
+
+    mergeSingleCostsForPrint();
+    const estimate = document.getElementById("estimatePage").cloneNode(true);
+    estimate.querySelectorAll("input").forEach(input => {
+        input.setAttribute("value", input.value);
+        if (input.checked) input.setAttribute("checked", "");
+        else input.removeAttribute("checked");
+    });
+    cleanupPrintLayout();
+
+    const printDocument = printWindow.document;
+    printDocument.open();
+    printDocument.write("<!doctype html><html><head><meta charset=\"utf-8\"><title>RLD Estimate</title></head><body></body></html>");
+    printDocument.close();
+
+    const base = printDocument.createElement("base");
+    base.href = document.baseURI;
+    printDocument.head.appendChild(base);
+    const stylesheet = printDocument.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = new URL("style.css", document.baseURI).href;
+
+    const container = printDocument.createElement("div");
+    container.className = "container";
+    container.appendChild(estimate);
+    printDocument.body.appendChild(container);
+
+    const openPrintDialog = () => {
+        const images = Array.from(printDocument.images);
+        Promise.all(images.map(image => image.complete
+            ? Promise.resolve()
+            : new Promise(resolve => {
+                image.addEventListener("load", resolve, { once: true });
+                image.addEventListener("error", resolve, { once: true });
+                window.setTimeout(resolve, 3000);
+            }))).then(() => {
+            if (!printWindow.closed) {
+                printWindow.focus();
+                printWindow.print();
+            }
+        });
+    };
+    stylesheet.addEventListener("load", openPrintDialog, { once: true });
+    stylesheet.addEventListener("error", () => {
+        document.getElementById("estimateMessage").textContent =
+            "Could not load the print layout. Reopen the app while connected to the server and try again.";
+    }, { once: true });
+    printDocument.head.appendChild(stylesheet);
+}
 
 // --- SAVE ESTIMATES AND QUEUE DRIVE SYNC ---
 function collectEstimateData() {
@@ -1014,6 +1166,8 @@ function collectEstimateData() {
         color: document.getElementById('color').value,
         insurance: document.getElementById('insurance').value,
         fileSuffix: document.getElementById('fileSuffix').value,
+        bundleLabor: document.getElementById("bundleLabor").checked,
+        bundleAllPrices: document.getElementById("bundleAllPrices").checked,
         totLabor: cleanNum(document.getElementById('totLabor').value),
         totParts: cleanNum(document.getElementById('totParts').value),
         downpayment: cleanNum(document.getElementById('downpayment').value),
@@ -1023,14 +1177,12 @@ function collectEstimateData() {
 
     document.querySelectorAll('#worksBody tr:not(.print-pad-row)').forEach(row => {
         const input = row.querySelector('.works-input');
-        const num = row.querySelector('.row-num');
         const lab = cleanNum(row.querySelector('.labor-cost').value);
         const part = cleanNum(row.querySelector('.parts-cost').value);
         
         if (input && input.value.trim() !== '') { 
-            const finalDesc = (num.innerText + " " + input.value).trim().toUpperCase();
             data.works.push({
-                desc: finalDesc,
+                desc: input.value.trim().toUpperCase(),
                 labor: lab === 0 ? "" : lab,
                 parts: part === 0 ? "" : part
             });
@@ -1039,8 +1191,33 @@ function collectEstimateData() {
     return data;
 }
 
+function clearEstimateForm() {
+    document.getElementById("estimateForm").reset();
+    const worksBody = document.getElementById("worksBody");
+    worksBody.replaceChildren();
+    addRow();
+    editingEstimateId = null;
+    document.getElementById("saveBtn").textContent = "SAVE";
+    updateWorkNumbers();
+    document.getElementById("estimateMessage").textContent = "";
+    calc();
+}
+
+document.getElementById("clearEntryBtn").addEventListener("click", () => {
+    const hasEntry = Array.from(document.querySelectorAll(
+        "#estimateForm input:not([type=checkbox])"
+    )).some(input => input.value.trim() !== "");
+    if (hasEntry && !window.confirm("Clear all fields in this estimate? Unsaved changes will be lost.")) {
+        return;
+    }
+    clearEstimateForm();
+    document.getElementById("estimateMessage").textContent = "The estimate entry has been cleared.";
+});
+
 document.getElementById("saveBtn").addEventListener("click", function() {
     try {
+        const dateInput = document.getElementById("date");
+        if (!dateInput.value) dateInput.value = getLocalDateString();
         const estimates = readEstimates();
         const existing = editingEstimateId ? estimates.find(item => item.id === editingEstimateId) : null;
         const savedAt = new Date().toISOString();
@@ -1058,14 +1235,19 @@ document.getElementById("saveBtn").addEventListener("click", function() {
         if (index < 0) estimates.push(estimate);
         else estimates[index] = estimate;
         writeEstimates(estimates);
+        refreshEstimateSuggestions();
 
-        editingEstimateId = null;
-        this.textContent = "SAVE";
-        document.getElementById("historyMessage").textContent =
-            "Saved on this device. It will sync automatically when the Windows server is reachable.";
+        clearEstimateForm();
+        document.getElementById("estimateMessage").textContent =
+            "Saved on this device and cleared from the form. It will sync when the Windows server is reachable.";
         syncPendingEstimates();
-        if (!document.getElementById("historyPage").hidden) renderHistory();
+        renderHistory();
     } catch (error) {
-        alert(`Could not save this estimate: ${error.message}`);
+        document.getElementById("estimateMessage").textContent =
+            `Could not save this estimate: ${error.message}`;
     }
+});
+
+["orgPrefix", "makeModel", "fileSuffix", "insurance"].forEach(id => {
+    document.getElementById(id).addEventListener("focus", refreshEstimateSuggestions);
 });
