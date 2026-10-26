@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RLD Autoworx | Job Estimate System</title>
+    <meta name="theme-color" content="#0b0f19">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,7 +16,7 @@
     <main class="auth-shell" id="authShell">
         <section class="auth-card" aria-labelledby="authTitle">
             <h1 id="authTitle">RLD AUTOWORX</h1>
-            <p class="auth-subtitle">Offline job estimate system</p>
+            <p class="auth-subtitle">Local quotation system · works offline after setup</p>
 
             <form id="loginForm" class="auth-form">
                 <h2>Sign in</h2>
@@ -24,7 +29,7 @@
             </form>
 
             <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
-            <p class="storage-note">Accounts and estimates stay in this browser on this device. Remember me keeps a password hash locally so you can stay signed in; this is not secure protection for confidential data.</p>
+            <p class="storage-note">Estimates are saved on this device first. After one successful server sign-in, a password hash is kept locally so you can sign in offline; “Remember me” also keeps your session on this device. Do not use this on a shared or untrusted phone.</p>
         </section>
     </main>
 
@@ -41,6 +46,7 @@
         <div class="app-toolbar no-print">
             <span>Signed in as <strong id="activeUsername"></strong></span>
             <span id="connectionStatus" class="connection-status" role="status" aria-live="polite"></span>
+            <button type="button" id="installAppBtn" class="logout-button">Install app</button>
             <nav class="app-navigation" aria-label="Main navigation">
                 <button type="button" id="showEstimatePage" class="nav-button" aria-current="page">
                     <span class="nav-icon" aria-hidden="true">▤</span><span>Estimate</span>
@@ -191,7 +197,7 @@
 
         <section id="historyPage" class="admin-panel no-print" hidden>
             <h1>Estimate history</h1>
-            <p class="auth-help">Saved estimates are available offline and sync to Drive when configured and connected.</p>
+            <p class="auth-help">Saved estimates stay on this device while offline and sync with the Windows server when it is reachable.</p>
             <div id="historyList"></div>
             <p id="historyMessage" class="auth-message" role="status" aria-live="polite"></p>
         </section>
@@ -199,6 +205,18 @@
         <section id="adminPage" class="admin-panel no-print" hidden>
             <h1>Manage accounts</h1>
             <p class="auth-help">Create accounts, set a user's password, or delete an account.</p>
+            <form id="adminPasswordForm" class="account-create-form">
+                <div class="account-field">
+                    <label for="currentAdminPassword">Current admin password</label>
+                    <input type="password" id="currentAdminPassword" autocomplete="current-password" autocapitalize="none" spellcheck="false" required>
+                </div>
+                <div class="account-field">
+                    <label for="newAdminPassword">New admin password</label>
+                    <input type="password" id="newAdminPassword" autocomplete="new-password" autocapitalize="none" spellcheck="false" minlength="8" required>
+                </div>
+                <button type="submit" class="btn">CHANGE ADMIN PASSWORD</button>
+            </form>
+            <p id="adminPasswordMessage" class="auth-message" role="status" aria-live="polite"></p>
             <form id="createUserForm" class="account-create-form">
                 <div class="account-field">
                     <label for="newUsername">New username</label>
@@ -213,28 +231,9 @@
             <p id="adminMessage" class="auth-message" role="status" aria-live="polite"></p>
             <h2>Existing accounts</h2>
             <div id="accountList"></div>
-            <div class="cloud-settings">
-                <h2>Google Drive sync</h2>
-                <p class="auth-help">Paste the deployed Apps Script web-app URL. Estimates are saved as Excel files in the Drive folder created by the script.</p>
-                <ol class="setup-instructions">
-                    <li>Create a project at <a href="https://script.google.com/" target="_blank" rel="noopener">Google Apps Script</a> and paste the contents of <code>Code.gs</code>.</li>
-                    <li>In Apps Script, add the advanced <strong>Drive API</strong> service.</li>
-                    <li>Run <code>setup</code> once in the editor and approve Google Drive/Sheets permissions.</li>
-                    <li>Deploy as a web app that runs as your Google account and allows access to <strong>Anyone</strong> so the local app can call it. Share its URL only with trusted app users.</li>
-                    <li>Paste the deployed URL below. The first sync creates an RLD folder and an Excel file per estimate.</li>
-                </ol>
-                <p class="setup-warning">The local app login is not server authentication. Anyone with the deployed script URL may be able to access or modify synced estimates, so only use this setup with trusted users.</p>
-                <form id="cloudSettingsForm" class="cloud-settings-form">
-                    <label for="cloudScriptUrl">Apps Script web-app URL</label>
-                    <input type="url" id="cloudScriptUrl" placeholder="https://script.google.com/macros/s/.../exec">
-                    <button type="submit" class="btn">SAVE DRIVE SETTINGS</button>
-                </form>
-                <p id="cloudSettingsMessage" class="auth-message" role="status" aria-live="polite"></p>
-            </div>
         </section>
     </div>
 
-    <iframe id="syncFrame" name="syncFrame" title="Background Drive sync" hidden></iframe>
     <script src="script.js"></script>
 </body>
 </html>

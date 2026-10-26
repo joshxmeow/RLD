@@ -1,14 +1,15 @@
 // script.js
-const USERS_KEY = "rld.users.v1";
+const OFFLINE_USERS_KEY = "rld.offlineUsers.v1";
 const ACTIVE_USER_KEY = "rld.activeUser";
 const REMEMBERED_USER_KEY = "rld.rememberedUser";
 const REMEMBERED_CREDENTIAL_KEY = "rld.rememberedCredential";
 const ESTIMATES_KEY = "rld.estimates.v1";
-const CLOUD_URL_KEY = "rld.cloudScriptUrl";
 const ADMIN_USERNAME = "rld";
-const ADMIN_PASSWORD_HASH = "662e0514c2fd58527dca88e2d8b5776efa997e2f81d2cc09bf402c69a4e68efc";
 let editingEstimateId = null;
 let syncQueueRunning = false;
+let serverAuthenticated = false;
+let serverReachable = false;
+let installPromptEvent = null;
 
 const authShell = document.getElementById("authShell");
 const appContainer = document.getElementById("appContainer");
@@ -22,21 +23,81 @@ function getRememberCheckbox() {
     return document.getElementById("rememberMe") || document.getElementById("rememberUsername");
 }
 
-function readUsers() {
-    const stored = localStorage.getItem(USERS_KEY);
-    if (stored === null) return [];
-    const users = JSON.parse(stored);
-    if (!Array.isArray(users)) throw new Error("Saved account data is invalid.");
-    return users;
-}
-
-async function hashPassword(password) {
+async function hashPassword(password, salt) {
     if (!window.crypto || !window.crypto.subtle) {
         throw new Error("Password protection is unavailable in this browser. Open this page in a supported browser.");
     }
-    const bytes = new TextEncoder().encode(password);
-    const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+    const key = await window.crypto.subtle.importKey(
+        "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]
+    );
+    const saltBytes = Uint8Array.from(salt.match(/.{2}/g), byte => parseInt(byte, 16));
+    const digest = await window.crypto.subtle.deriveBits({
+        name: "PBKDF2",
+        salt: saltBytes,
+        iterations: 310000,
+        hash: "SHA-256"
+    }, key, 256);
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function createOfflineCredential(password) {
+    const salt = Array.from(window.crypto.getRandomValues(new Uint8Array(16)),
+        byte => byte.toString(16).padStart(2, "0")).join("");
+    return { salt, passwordHash: await hashPassword(password, salt) };
+}
+
+async function verifyOfflinePassword(password, user) {
+    if (user.salt) return await hashPassword(password, user.salt) === user.passwordHash;
+    const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(password));
+    const legacyHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    return legacyHash === user.passwordHash;
+}
+
+async function apiRequest(path, options = {}) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    try {
+        const response = await fetch(path, {
+            credentials: "same-origin",
+            ...options,
+            headers: {
+                ...(options.body ? { "Content-Type": "application/json" } : {}),
+                ...options.headers
+            },
+            signal: controller.signal
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const error = new Error(result.error || `Server returned ${response.status}.`);
+            error.status = response.status;
+            error.code = result.code;
+            throw error;
+        }
+        return result;
+    } finally {
+        window.clearTimeout(timeout);
+    }
+}
+
+function readOfflineUsers() {
+    const saved = localStorage.getItem(OFFLINE_USERS_KEY);
+    return saved ? JSON.parse(saved) : {};
+}
+
+function rememberOfflineUser(username, credential, role) {
+    const users = readOfflineUsers();
+    users[username] = { ...credential, role };
+    localStorage.setItem(OFFLINE_USERS_KEY, JSON.stringify(users));
+}
+
+function getOfflineUser(username) {
+    const users = readOfflineUsers();
+    if (users[username]) return users[username];
+    const legacyUsers = JSON.parse(localStorage.getItem("rld.users.v1") || "[]");
+    const legacyUser = Array.isArray(legacyUsers)
+        ? legacyUsers.find(user => user.username === username && user.status === "approved")
+        : null;
+    return legacyUser ? { passwordHash: legacyUser.passwordHash, role: "user" } : null;
 }
 
 function showApp(username) {
@@ -47,7 +108,7 @@ function showApp(username) {
     document.getElementById("showAdminPage").hidden = !isAdmin;
     showPage("estimate");
     updateConnectionStatus();
-    syncPendingEstimates();
+    checkServerSession();
 }
 
 function showPage(page) {
@@ -89,7 +150,7 @@ function readEstimates() {
     estimates.forEach((estimate, index) => {
         if (!estimate.id) {
             estimate.id = `${estimate.savedAt || Date.now()}-${index}`;
-            estimate.syncStatus = "unconfigured";
+            estimate.syncStatus = "pending";
             migrated = true;
         }
         if (!estimate.updatedAt) {
@@ -109,14 +170,21 @@ function showLogin() {
     authShell.hidden = false;
     appContainer.hidden = true;
     sessionStorage.removeItem(ACTIVE_USER_KEY);
+    serverAuthenticated = false;
+    serverReachable = false;
     setAuthMessage("");
 }
 
-function renderAccounts() {
+async function renderAccounts() {
     const list = document.getElementById("accountList");
     list.replaceChildren();
+    if (!serverAuthenticated || !navigator.onLine) {
+        list.textContent = "Connect to the Windows server and sign in again to manage shared accounts.";
+        return;
+    }
     try {
-        const users = readUsers().filter(user => user.username !== ADMIN_USERNAME);
+        const result = await apiRequest("/api/users");
+        const users = result.users.filter(user => user.username !== ADMIN_USERNAME);
         if (users.length === 0) {
             list.textContent = "No user accounts yet.";
             return;
@@ -128,7 +196,7 @@ function renderAccounts() {
             name.textContent = user.username;
             const status = document.createElement("span");
             status.className = "account-status";
-            status.textContent = user.status === "approved" ? "Active" : "Pending";
+            status.textContent = "Active";
             const password = document.createElement("input");
             password.type = "password";
             password.autocomplete = "new-password";
@@ -155,7 +223,7 @@ function renderAccounts() {
             list.appendChild(row);
         });
     } catch (error) {
-        list.textContent = `Could not load accounts: ${error.message}`;
+        list.textContent = `Could not load server accounts: ${error.message}`;
     }
 }
 
@@ -170,16 +238,11 @@ async function updateUserPassword(username, password) {
         return;
     }
     try {
-        const users = readUsers();
-        const user = users.find(item => item.username === username);
-        if (!user) {
-            document.getElementById("adminMessage").textContent = "That account no longer exists.";
-            renderAccounts();
-            return;
-        }
-        user.passwordHash = await hashPassword(password);
-        user.status = "approved";
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        await apiRequest(`/api/users/${encodeURIComponent(username)}`, {
+            method: "PUT",
+            body: JSON.stringify({ password })
+        });
+        rememberOfflineUser(username, await createOfflineCredential(password), "user");
         document.getElementById("adminMessage").textContent = `${username}'s password was updated.`;
         renderAccounts();
     } catch (error) {
@@ -190,14 +253,19 @@ async function updateUserPassword(username, password) {
 function deleteUser(username) {
     if (!isAdminSession()) return;
     if (!window.confirm(`Delete the account "${username}"? This cannot be undone.`)) return;
-    try {
-        const users = readUsers().filter(user => user.username !== username);
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    if (!serverAuthenticated || !navigator.onLine) {
+        document.getElementById("adminMessage").textContent = "Connect to the Windows server to delete shared accounts.";
+        return;
+    }
+    apiRequest(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" }).then(() => {
+        const offlineUsers = readOfflineUsers();
+        delete offlineUsers[username];
+        localStorage.setItem(OFFLINE_USERS_KEY, JSON.stringify(offlineUsers));
         document.getElementById("adminMessage").textContent = `${username}'s account was deleted.`;
         renderAccounts();
-    } catch (error) {
+    }).catch(error => {
         document.getElementById("adminMessage").textContent = `Could not delete the account: ${error.message}`;
-    }
+    });
 }
 
 document.getElementById("showEstimatePage").addEventListener("click", () => showPage("estimate"));
@@ -214,36 +282,43 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
     submitButton.disabled = true;
     setAuthMessage("Checking sign-in details...");
     try {
-        localStorage.removeItem(REMEMBERED_USER_KEY);
-        localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
-        const passwordHash = await hashPassword(password);
-        const isAdmin = username === ADMIN_USERNAME && passwordHash === ADMIN_PASSWORD_HASH;
-        const users = readUsers();
-        const user = users.find(item => item.username === username);
-        if (username === ADMIN_USERNAME && !isAdmin) {
-            setAuthMessage("Incorrect password for the admin username.");
-            return;
+        let signedInUsername = username;
+        let role;
+        let offlineCredential;
+        let onlineError;
+        try {
+            const result = await apiRequest("/api/login", {
+                method: "POST",
+                body: JSON.stringify({ username, password, remember })
+            });
+            signedInUsername = result.username;
+            role = result.role;
+            serverAuthenticated = true;
+            serverReachable = true;
+            offlineCredential = await createOfflineCredential(password);
+            rememberOfflineUser(signedInUsername, offlineCredential, role);
+        } catch (error) {
+            if (error.status) throw error;
+            onlineError = error;
+            const localUser = getOfflineUser(username);
+            if (!localUser) {
+                throw new Error(`The local server could not be reached and this device has no offline account for "${username}". Connect to the server and sign in once first.`);
+            }
+            if (!await verifyOfflinePassword(password, localUser)) {
+                throw new Error(`Incorrect password for ${username} (offline account).`);
+            }
+            role = localUser.role || "user";
+            serverAuthenticated = false;
+            serverReachable = false;
+            offlineCredential = await createOfflineCredential(password);
+            rememberOfflineUser(username, offlineCredential, role);
         }
-        if (!isAdmin && !user) {
-            setAuthMessage("Username not found on this website. Ask the admin to create an account for this published site.");
-            return;
-        }
-        if (!isAdmin && user.passwordHash !== passwordHash) {
-            setAuthMessage("Incorrect password for this username.");
-            return;
-        }
-        if (!isAdmin && user.status !== "approved") {
-            setAuthMessage("This account is not active. Ask the admin to set or reset its password.");
-            return;
-        }
-
-        const signedInUsername = isAdmin ? ADMIN_USERNAME : user.username;
         sessionStorage.setItem(ACTIVE_USER_KEY, signedInUsername);
         if (remember) {
             localStorage.setItem(REMEMBERED_USER_KEY, signedInUsername);
             localStorage.setItem(REMEMBERED_CREDENTIAL_KEY, JSON.stringify({
                 username: signedInUsername,
-                passwordHash
+                ...offlineCredential
             }));
         } else {
             localStorage.removeItem(REMEMBERED_USER_KEY);
@@ -251,8 +326,17 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
         }
         document.getElementById("loginPassword").value = "";
         showApp(signedInUsername);
+        if (onlineError) {
+            document.getElementById("historyMessage").textContent =
+                "Signed in offline. Changes are saved on this device and will sync when the Windows server is reachable.";
+        }
     } catch (error) {
-        setAuthMessage(`Sign-in could not be checked: ${error.message}`);
+        const message = error.code === "username_not_found"
+            ? "Username not found on the local server."
+            : error.code === "wrong_password"
+                ? "Incorrect password for this username."
+                : error.message;
+        setAuthMessage(message);
     } finally {
         submitButton.disabled = false;
     }
@@ -275,15 +359,16 @@ document.getElementById("createUserForm").addEventListener("submit", async event
         document.getElementById("adminMessage").textContent = "Passwords must be at least 8 characters.";
         return;
     }
+    if (!serverAuthenticated || !navigator.onLine) {
+        document.getElementById("adminMessage").textContent = "Connect to the Windows server to create shared accounts.";
+        return;
+    }
     try {
-        const users = readUsers();
-        if (users.some(user => user.username === username)) {
-            document.getElementById("adminMessage").textContent = "That username already exists.";
-            return;
-        }
-        const passwordHash = await hashPassword(password);
-        users.push({ username, passwordHash, status: "approved" });
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        await apiRequest("/api/users", {
+            method: "POST",
+            body: JSON.stringify({ username, password })
+        });
+        rememberOfflineUser(username, await createOfflineCredential(password), "user");
         document.getElementById("createUserForm").reset();
         document.getElementById("adminMessage").textContent = `${username}'s account was created.`;
         renderAccounts();
@@ -292,18 +377,65 @@ document.getElementById("createUserForm").addEventListener("submit", async event
     }
 });
 
-document.getElementById("logoutBtn").addEventListener("click", showLogin);
+document.getElementById("adminPasswordForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!isAdminSession()) return;
+    if (!serverAuthenticated) {
+        document.getElementById("adminPasswordMessage").textContent =
+            "Connect to the Windows server and sign in again to change the administrator password.";
+        return;
+    }
+    const form = event.currentTarget;
+    const currentPassword = document.getElementById("currentAdminPassword").value;
+    const newPassword = document.getElementById("newAdminPassword").value;
+    const message = document.getElementById("adminPasswordMessage");
+    try {
+        await apiRequest("/api/admin/password", {
+            method: "PUT",
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+        form.reset();
+        const cachedUsers = readOfflineUsers();
+        delete cachedUsers[ADMIN_USERNAME];
+        localStorage.setItem(OFFLINE_USERS_KEY, JSON.stringify(cachedUsers));
+        localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
+        localStorage.removeItem(REMEMBERED_USER_KEY);
+        showLogin();
+        setAuthMessage("Administrator password changed. Sign in again with the new password.");
+    } catch (error) {
+        message.textContent = `Could not change administrator password: ${error.message}`;
+    }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+    let logoutError;
+    if (navigator.onLine && serverAuthenticated) {
+        try {
+            await apiRequest("/api/logout", { method: "POST", body: "{}" });
+        } catch (error) {
+            logoutError = error;
+        }
+    }
+    localStorage.removeItem(REMEMBERED_USER_KEY);
+    localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
+    showLogin();
+    if (logoutError) {
+        setAuthMessage(`Signed out on this device, but the server session could not be cleared: ${logoutError.message}`);
+    }
+});
 
 function updateConnectionStatus() {
     const indicator = document.getElementById("connectionStatus");
-    const online = navigator.onLine;
-    indicator.textContent = online ? "Connection: Online" : "Connection: Offline";
-    indicator.classList.toggle("online", online);
-    indicator.classList.toggle("offline", !online);
-}
-
-function getCloudUrl() {
-    return localStorage.getItem(CLOUD_URL_KEY) || "";
+    const message = !navigator.onLine
+        ? "Server: Offline — saved on this device"
+        : serverReachable
+            ? serverAuthenticated
+                ? syncQueueRunning ? "Server: Connected and syncing" : "Server: Connected"
+                : "Server: Available — sign in again to sync"
+            : "Server: Unavailable — saved on this device";
+    indicator.textContent = message;
+    indicator.classList.toggle("online", serverReachable && serverAuthenticated);
+    indicator.classList.toggle("offline", !serverReachable || !serverAuthenticated);
 }
 
 function updateHistoryStatus(estimateId, status, details = {}) {
@@ -311,149 +443,107 @@ function updateHistoryStatus(estimateId, status, details = {}) {
     const estimate = estimates.find(item => item.id === estimateId);
     if (!estimate) return;
     estimate.syncStatus = status;
-    if (status !== "synced") {
-        delete estimate.cloudFileId;
-        delete estimate.cloudUrl;
-    }
     Object.assign(estimate, details);
     writeEstimates(estimates);
     if (!document.getElementById("historyPage").hidden) renderHistory();
 }
 
-function submitCloudOperation(payload) {
-    return new Promise((resolve, reject) => {
-        const endpoint = getCloudUrl();
-        if (!endpoint) {
-            reject(new Error("Google Drive sync is not configured."));
-            return;
-        }
-        const frame = document.getElementById("syncFrame");
-        const form = document.createElement("form");
-        const field = document.createElement("input");
-        form.method = "post";
-        form.action = endpoint;
-        form.target = frame.name;
-        form.hidden = true;
-        field.type = "hidden";
-        field.name = "payload";
-        field.value = JSON.stringify(payload);
-        form.appendChild(field);
-        document.body.appendChild(form);
-
-        const timeout = window.setTimeout(() => {
-            cleanup();
-            reject(new Error("Drive sync timed out. Check the Apps Script deployment and try again."));
-        }, 30000);
-        function cleanup() {
-            window.clearTimeout(timeout);
-            window.removeEventListener("message", onMessage);
-            form.remove();
-        }
-        function onMessage(event) {
-            if (event.source !== frame.contentWindow || !event.data || event.data.type !== "rld-drive-result") return;
-            cleanup();
-            if (event.data.success) resolve(event.data);
-            else reject(new Error(event.data.error || "The Drive script could not save the estimate."));
-        }
-        window.addEventListener("message", onMessage);
-        form.submit();
-    });
-}
-
-async function syncEstimate(estimate) {
-    if (!getCloudUrl()) {
-        updateHistoryStatus(estimate.id, "unconfigured");
-        return;
-    }
-    if (!navigator.onLine) {
-        updateHistoryStatus(estimate.id, estimate.deleted ? "offline-delete" : "offline");
-        return;
-    }
-    updateHistoryStatus(estimate.id, estimate.deleted ? "deleting" : "syncing");
-    try {
-        const result = await submitCloudOperation(estimate.deleted
-            ? { action: "delete", id: estimate.id }
-            : { action: "save", record: estimate });
-        if (estimate.deleted) {
-            writeEstimates(readEstimates().filter(item => item.id !== estimate.id));
-            if (!document.getElementById("historyPage").hidden) renderHistory();
-            return;
-        }
-        updateHistoryStatus(estimate.id, "synced", {
-            cloudFileId: result.fileId,
-            cloudUrl: result.fileUrl,
-            cloudUpdatedAt: result.updatedAt
-        });
-    } catch (error) {
-        updateHistoryStatus(estimate.id, navigator.onLine ? "error" : "offline", { syncError: error.message });
-    }
-}
-
-function syncPendingEstimates() {
-    if (!getCloudUrl()) {
-        try {
-            const estimates = readEstimates();
-            estimates.forEach(estimate => {
-                if (estimate.syncStatus !== "synced" && estimate.syncStatus !== "error") {
-                    estimate.syncStatus = "unconfigured";
-                }
-            });
-            writeEstimates(estimates);
-            if (!document.getElementById("historyPage").hidden) renderHistory();
-        } catch (error) {
-            document.getElementById("historyMessage").textContent = `Could not update sync status: ${error.message}`;
-        }
-        return;
-    }
-    if (!navigator.onLine) {
-        try {
-            const estimates = readEstimates();
-            estimates.forEach(estimate => {
-                if (estimate.syncStatus !== "synced" && estimate.syncStatus !== "error") {
-                    estimate.syncStatus = estimate.deleted ? "offline-delete" : "offline";
-                }
-            });
-            writeEstimates(estimates);
-            if (!document.getElementById("historyPage").hidden) renderHistory();
-        } catch (error) {
-            document.getElementById("historyMessage").textContent = `Could not update sync status: ${error.message}`;
-        }
+async function checkServerSession() {
+    if (!navigator.onLine || !sessionStorage.getItem(ACTIVE_USER_KEY)) {
+        serverReachable = false;
+        serverAuthenticated = false;
         updateConnectionStatus();
         return;
     }
-    if (syncQueueRunning) {
-        updateConnectionStatus();
-        return;
-    }
-    let estimates;
     try {
-        estimates = readEstimates();
+        await apiRequest("/api/health");
+        serverReachable = true;
+        try {
+            const session = await apiRequest("/api/session");
+            serverAuthenticated = session.username === sessionStorage.getItem(ACTIVE_USER_KEY);
+            if (serverAuthenticated) await syncPendingEstimates();
+        } catch (error) {
+            if (error.status === 401) {
+                serverAuthenticated = false;
+            } else {
+                throw error;
+            }
+        }
     } catch (error) {
-        document.getElementById("historyMessage").textContent = `Could not read local history: ${error.message}`;
+        serverReachable = false;
+        serverAuthenticated = false;
+        if (error.name !== "AbortError" && document.getElementById("historyPage") &&
+            !document.getElementById("historyPage").hidden) {
+            document.getElementById("historyMessage").textContent =
+                `Could not contact the Windows server: ${error.message}. Local changes remain saved on this device.`;
+        }
+    }
+    updateConnectionStatus();
+    if (!document.getElementById("historyPage").hidden) renderHistory();
+}
+
+async function syncPendingEstimates() {
+    if (syncQueueRunning || !navigator.onLine || !serverAuthenticated) {
+        updateConnectionStatus();
         return;
     }
     syncQueueRunning = true;
-    (async () => {
-        try {
-            for (const estimate of estimates.filter(item =>
-                (item.deleted || item.syncStatus !== "synced") &&
-                !["syncing", "deleting", "error"].includes(item.syncStatus))) {
-                await syncEstimate(estimate);
+    try {
+        let localEstimates = readEstimates();
+        const result = await apiRequest("/api/estimates");
+        const remoteById = new Map(result.estimates.map(estimate => [estimate.id, estimate]));
+        const localById = new Map(localEstimates.map(estimate => [estimate.id, estimate]));
+
+        result.estimates.forEach(remote => {
+            const local = localById.get(remote.id);
+            if (!local) {
+                localEstimates.push({ ...remote, syncStatus: "synced" });
+                return;
             }
-        } finally {
-            syncQueueRunning = false;
+            const localTime = Date.parse(local.updatedAt || local.savedAt || 0);
+            const remoteTime = Date.parse(remote.updatedAt || remote.savedAt || 0);
+            if (local.syncStatus === "synced" || remoteTime > localTime) {
+                Object.assign(local, remote, { syncStatus: "synced" });
+            }
+        });
+
+        for (const local of localEstimates) {
+            const remote = remoteById.get(local.id);
+            if (local.syncStatus === "synced" && remote) continue;
+            if (local.syncStatus === "error" && !local.deleted) continue;
+            local.syncStatus = "syncing";
+            writeEstimates(localEstimates);
             try {
-                if (readEstimates().some(item =>
-                    (item.syncStatus === "pending" || item.syncStatus === "offline" ||
-                        item.syncStatus === "offline-delete") &&
-                    !["syncing", "deleting"].includes(item.syncStatus))) {
-                    syncPendingEstimates();
-                }
+                const saved = await apiRequest(`/api/estimates/${encodeURIComponent(local.id)}`, {
+                    method: "PUT",
+                    body: JSON.stringify(local)
+                });
+                const index = localEstimates.findIndex(item => item.id === local.id);
+                localEstimates[index] = { ...saved.estimate, syncStatus: "synced" };
             } catch (error) {
-                document.getElementById("historyMessage").textContent = `Could not queue Drive sync: ${error.message}`;
+                local.syncStatus = error.status === 401 || !error.status ? "offline" : "error";
+                local.syncError = error.message;
+                if (error.status === 401) {
+                    serverAuthenticated = false;
+                    break;
+                }
+                if (!error.status) {
+                    serverReachable = false;
+                    break;
+                }
             }
         }
-    })();
+        writeEstimates(localEstimates);
+        if (!document.getElementById("historyPage").hidden) renderHistory();
+    } catch (error) {
+        if (error.status === 401) serverAuthenticated = false;
+        if (!error.status) serverReachable = false;
+        document.getElementById("historyMessage").textContent =
+            `Sync failed: ${error.message}. Local changes remain saved on this device.`;
+    } finally {
+        syncQueueRunning = false;
+        updateConnectionStatus();
+    }
 }
 
 function getHistoryTitle(estimate) {
@@ -462,13 +552,20 @@ function getHistoryTitle(estimate) {
 
 function getStatusLabel(estimate) {
     switch (estimate.syncStatus) {
-        case "synced": return ["Synced to Drive", "synced"];
+        case "synced": return ["Synced to server", "synced"];
         case "syncing": return ["Syncing...", "syncing"];
         case "offline":
-        case "offline-delete": return ["Not synced — offline", "offline"];
-        case "deleting": return ["Removing from Drive...", "syncing"];
+        case "offline-delete":
+            if (!navigator.onLine) return ["Not yet synced — offline", "offline"];
+            if (serverReachable && !serverAuthenticated) return ["Not synced — sign in again", "offline"];
+            return ["Not yet synced — server unavailable", "offline"];
+        case "deleting": return ["Syncing deletion...", "syncing"];
         case "error": return [estimate.deleted ? "Delete failed" : "Sync failed", "error"];
-        default: return ["Not synced — configure Drive", "unconfigured"];
+        default:
+            if (!navigator.onLine) return ["Not yet synced — offline", "offline"];
+            if (serverReachable && !serverAuthenticated) return ["Not synced — sign in again", "offline"];
+            if (!serverReachable) return ["Not yet synced — server unavailable", "offline"];
+            return ["Not yet synced", "offline"];
     }
 }
 
@@ -524,13 +621,13 @@ function renderHistory() {
         edit.textContent = "Edit";
         edit.addEventListener("click", () => editEstimate(estimate));
         row.appendChild(edit);
-        if (estimate.cloudUrl) {
+        if (estimate.syncStatus === "synced") {
             const open = document.createElement("a");
             open.className = "request-button history-action";
-            open.href = estimate.cloudUrl;
+            open.href = `/api/estimates/${encodeURIComponent(estimate.id)}/pdf`;
             open.target = "_blank";
             open.rel = "noopener";
-            open.textContent = "Open in Drive";
+            open.textContent = "Download PDF";
             row.appendChild(open);
         }
         const remove = document.createElement("button");
@@ -545,47 +642,7 @@ function renderHistory() {
 
 function loadHistory() {
     renderHistory();
-    if (!navigator.onLine || !getCloudUrl()) {
-        syncPendingEstimates();
-        return;
-    }
-    const callbackName = `rldHistory_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const script = document.createElement("script");
-    const timeout = window.setTimeout(() => finish(new Error("Could not reach Google Drive.")), 15000);
-    function finish(error, records) {
-        window.clearTimeout(timeout);
-        delete window[callbackName];
-        script.remove();
-        if (error) {
-            document.getElementById("historyMessage").textContent = `${error.message} Showing this device's saved history.`;
-            return;
-        }
-        try {
-            const estimates = readEstimates();
-            records.forEach(record => {
-                const existingIndex = estimates.findIndex(item => item.id === record.id);
-                const cloudRecord = { ...record, cloudUpdatedAt: record.updatedAt, syncStatus: "synced" };
-                if (existingIndex < 0) estimates.push(cloudRecord);
-                else if (!estimates[existingIndex].deleted && estimates[existingIndex].syncStatus === "synced" &&
-                    new Date(record.updatedAt) > new Date(estimates[existingIndex].cloudUpdatedAt ||
-                        estimates[existingIndex].updatedAt || estimates[existingIndex].savedAt)) {
-                    estimates[existingIndex] = cloudRecord;
-                }
-            });
-            writeEstimates(estimates);
-            renderHistory();
-            syncPendingEstimates();
-        } catch (loadError) {
-            document.getElementById("historyMessage").textContent = `Could not merge Drive history: ${loadError.message}`;
-        }
-    }
-    window[callbackName] = response => {
-        if (!response || !response.success) finish(new Error(response && response.error || "Drive history could not be loaded."));
-        else finish(null, response.records || []);
-    };
-    script.onerror = () => finish(new Error("Could not reach Google Drive."));
-    script.src = `${getCloudUrl()}?action=list&callback=${encodeURIComponent(callbackName)}&t=${Date.now()}`;
-    document.body.appendChild(script);
+    checkServerSession();
 }
 
 function editEstimate(estimate) {
@@ -612,44 +669,29 @@ function editEstimate(estimate) {
 }
 
 function deleteEstimate(estimate) {
-    if (!window.confirm(`Delete "${getHistoryTitle(estimate)}" from history and Drive?`)) return;
+    if (!window.confirm(`Delete "${getHistoryTitle(estimate)}" from history and the local server?`)) return;
     try {
         const estimates = readEstimates();
         const existing = estimates.find(item => item.id === estimate.id);
         if (!existing) return;
         existing.deleted = true;
-        existing.syncStatus = "offline-delete";
+        existing.updatedAt = new Date().toISOString();
+        existing.syncStatus = "pending";
         writeEstimates(estimates);
         renderHistory();
-        if (getCloudUrl() && navigator.onLine) syncPendingEstimates();
+        syncPendingEstimates();
     } catch (error) {
         document.getElementById("historyMessage").textContent = `Could not delete estimate: ${error.message}`;
     }
 }
 
-document.getElementById("cloudScriptUrl").value = getCloudUrl();
-document.getElementById("cloudSettingsForm").addEventListener("submit", event => {
-    event.preventDefault();
-    if (!isAdminSession()) return;
-    const url = document.getElementById("cloudScriptUrl").value.trim();
-    if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) {
-        document.getElementById("cloudSettingsMessage").textContent = "Enter a deployed Google Apps Script web-app URL ending in /exec.";
-        return;
-    }
-    localStorage.setItem(CLOUD_URL_KEY, url);
-    document.getElementById("cloudSettingsMessage").textContent = url
-        ? "Drive sync URL saved. Pending estimates will sync when online."
-        : "Drive sync URL removed. Estimates will remain saved on this device.";
-    syncPendingEstimates();
-});
-
 window.addEventListener("online", () => {
-    updateConnectionStatus();
-    syncPendingEstimates();
+    checkServerSession();
 });
 window.addEventListener("offline", () => {
+    serverReachable = false;
+    serverAuthenticated = false;
     updateConnectionStatus();
-    syncPendingEstimates();
 });
 updateConnectionStatus();
 
@@ -663,14 +705,9 @@ try {
     const rememberedCredential = localStorage.getItem(REMEMBERED_CREDENTIAL_KEY);
     if (rememberedCredential) {
         const credential = JSON.parse(rememberedCredential);
-        const users = readUsers();
-        const rememberedUser = users.find(user => user.username === credential.username);
-        const isRememberedAdmin = credential.username === ADMIN_USERNAME &&
-            credential.passwordHash === ADMIN_PASSWORD_HASH;
-        const isRememberedUser = rememberedUser &&
-            rememberedUser.status === "approved" &&
-            rememberedUser.passwordHash === credential.passwordHash;
-        if (isRememberedAdmin || isRememberedUser) {
+        const localUser = getOfflineUser(credential.username);
+        if (localUser && localUser.passwordHash === credential.passwordHash &&
+            localUser.salt === credential.salt) {
             sessionStorage.setItem(ACTIVE_USER_KEY, credential.username);
             showApp(credential.username);
         } else {
@@ -679,13 +716,53 @@ try {
         }
     }
     const activeUsername = sessionStorage.getItem(ACTIVE_USER_KEY);
-    if (appContainer.hidden && (activeUsername === ADMIN_USERNAME || readUsers().some(user =>
-        user.username === activeUsername && user.status === "approved"))) {
+    if (appContainer.hidden && activeUsername && getOfflineUser(activeUsername)) {
         showApp(activeUsername);
     }
 } catch (error) {
     setAuthMessage(`Local account storage is unavailable: ${error.message}`);
 }
+
+window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    installPromptEvent = event;
+    document.getElementById("installAppBtn").hidden = false;
+});
+
+document.getElementById("installAppBtn").addEventListener("click", async () => {
+    if (!installPromptEvent) {
+        document.getElementById("historyMessage").textContent =
+            "On iPhone, open the Share menu in Safari and choose Add to Home Screen. On Android, use the browser menu and choose Install app.";
+        return;
+    }
+    try {
+        installPromptEvent.prompt();
+        await installPromptEvent.userChoice;
+        installPromptEvent = null;
+        document.getElementById("installAppBtn").hidden = true;
+    } catch (error) {
+        document.getElementById("historyMessage").textContent = `Could not start installation: ${error.message}`;
+    }
+});
+
+if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/service-worker.js").catch(error => {
+        const message = `Offline app setup failed: ${error.message}`;
+        if (appContainer.hidden) setAuthMessage(message);
+        else document.getElementById("historyMessage").textContent = message;
+    });
+}
+
+if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) {
+    document.getElementById("installAppBtn").hidden = true;
+}
+window.addEventListener("appinstalled", () => {
+    document.getElementById("installAppBtn").hidden = true;
+});
+window.setInterval(checkServerSession, 15000);
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkServerSession();
+});
 
 const learnedRepairs = [
     "PULLOUT & REPLACE FRONT SHOCK ABSORBER SET", "PULLOUT & REPLACE LOWER BALL JOINT SET",
@@ -970,7 +1047,7 @@ document.getElementById("saveBtn").addEventListener("click", function() {
             updatedAt: savedAt,
             username: existing ? existing.username : sessionStorage.getItem(ACTIVE_USER_KEY),
             data: collectEstimateData(),
-            syncStatus: getCloudUrl() ? (navigator.onLine ? "pending" : "offline") : "unconfigured",
+            syncStatus: "pending",
             deleted: false
         };
         const index = estimates.findIndex(item => item.id === estimate.id);
@@ -980,9 +1057,8 @@ document.getElementById("saveBtn").addEventListener("click", function() {
 
         editingEstimateId = null;
         this.textContent = "SAVE";
-        document.getElementById("historyMessage").textContent = getCloudUrl()
-            ? "Saved locally. Drive sync is starting."
-            : "Saved locally. Configure the Apps Script URL in Manage accounts to sync with Drive.";
+        document.getElementById("historyMessage").textContent =
+            "Saved on this device. It will sync automatically when the Windows server is reachable.";
         syncPendingEstimates();
         if (!document.getElementById("historyPage").hidden) renderHistory();
     } catch (error) {

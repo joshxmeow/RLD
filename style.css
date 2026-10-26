@@ -62,7 +62,7 @@ body {
 .cloud-status { white-space: nowrap; font-size: 12px; }
 .cloud-status.synced { color: #00ff88; }
 .cloud-status.syncing { color: var(--accent); }
-.cloud-status.offline, .cloud-status.error, .cloud-status.unconfigured { color: #ffcf70; }
+.cloud-status.offline, .cloud-status.error { color: #ffcf70; }
 .history-action { padding: 7px 10px; }
 .cloud-settings { margin-top: 26px; border-top: 1px solid var(--border-color); padding-top: 18px; }
 .setup-instructions { padding-left: 22px; font-size: 12px; line-height: 1.7; opacity: 0.85; }
