@@ -18,6 +18,10 @@ function setAuthMessage(message) {
     authMessage.textContent = message;
 }
 
+function getRememberCheckbox() {
+    return document.getElementById("rememberMe") || document.getElementById("rememberUsername");
+}
+
 function readUsers() {
     const stored = localStorage.getItem(USERS_KEY);
     if (stored === null) return [];
@@ -204,7 +208,8 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
     event.preventDefault();
     const username = document.getElementById("loginUsername").value.trim().toLowerCase();
     const password = document.getElementById("loginPassword").value;
-    const remember = document.getElementById("rememberMe").checked;
+    const rememberCheckbox = getRememberCheckbox();
+    const remember = Boolean(rememberCheckbox && rememberCheckbox.checked);
     const submitButton = event.currentTarget.querySelector('button[type="submit"]');
     submitButton.disabled = true;
     setAuthMessage("Checking sign-in details...");
@@ -650,9 +655,10 @@ updateConnectionStatus();
 
 try {
     const rememberedUsername = localStorage.getItem(REMEMBERED_USER_KEY);
+    const rememberCheckbox = getRememberCheckbox();
     if (rememberedUsername) {
         document.getElementById("loginUsername").value = rememberedUsername;
-        document.getElementById("rememberMe").checked = true;
+        if (rememberCheckbox) rememberCheckbox.checked = true;
     }
     const rememberedCredential = localStorage.getItem(REMEMBERED_CREDENTIAL_KEY);
     if (rememberedCredential) {
