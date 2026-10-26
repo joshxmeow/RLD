@@ -41,10 +41,20 @@
         <div class="app-toolbar no-print">
             <span>Signed in as <strong id="activeUsername"></strong></span>
             <span id="connectionStatus" class="connection-status" role="status" aria-live="polite"></span>
-            <button type="button" id="showEstimatePage" class="text-button">Estimate</button>
-            <button type="button" id="showHistoryPage" class="text-button">History</button>
-            <button type="button" id="showAdminPage" class="text-button" hidden>Manage accounts</button>
-            <button type="button" id="logoutBtn" class="text-button">Sign out</button>
+            <nav class="app-navigation" aria-label="Main navigation">
+                <button type="button" id="showEstimatePage" class="nav-button" aria-current="page">
+                    <span class="nav-icon" aria-hidden="true">▤</span><span>Estimate</span>
+                </button>
+                <button type="button" id="showHistoryPage" class="nav-button">
+                    <span class="nav-icon" aria-hidden="true">◷</span><span>History</span>
+                </button>
+                <button type="button" id="showAdminPage" class="nav-button" hidden>
+                    <span class="nav-icon" aria-hidden="true">⚙</span><span>Manage accounts</span>
+                </button>
+            </nav>
+            <button type="button" id="logoutBtn" class="logout-button">
+                <span aria-hidden="true">↪</span> Sign out
+            </button>
         </div>
 
         <section id="estimatePage">

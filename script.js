@@ -49,13 +49,28 @@ function showPage(page) {
     const isAdmin = sessionStorage.getItem(ACTIVE_USER_KEY) === ADMIN_USERNAME;
     const showAdmin = page === "admin" && isAdmin;
     const showHistory = page === "history";
-    document.getElementById("estimatePage").hidden = showAdmin;
+    const activePage = showAdmin ? "admin" : showHistory ? "history" : "estimate";
+    document.getElementById("estimatePage").hidden = showAdmin || showHistory;
     document.getElementById("adminPage").hidden = !showAdmin;
     document.getElementById("historyPage").hidden = !showHistory;
-    document.getElementById("estimatePage").hidden = showAdmin || showHistory;
-    document.getElementById("showEstimatePage").classList.toggle("active-page", !showAdmin && !showHistory);
-    document.getElementById("showHistoryPage").classList.toggle("active-page", showHistory);
-    document.getElementById("showAdminPage").classList.toggle("active-page", showAdmin);
+    const navigationPages = {
+        estimate: ["showEstimatePage", "estimatePage"],
+        history: ["showHistoryPage", "historyPage"],
+        admin: ["showAdminPage", "adminPage"]
+    };
+    Object.entries(navigationPages).forEach(([pageName, [buttonId, panelId]]) => {
+        const button = document.getElementById(buttonId);
+        const panel = document.getElementById(panelId);
+        const active = pageName === activePage;
+        button.classList.toggle("active-page", active);
+        if (active) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+        if (active) {
+            panel.classList.remove("page-enter");
+            void panel.offsetWidth;
+            panel.classList.add("page-enter");
+        }
+    });
     if (showAdmin) renderAccounts();
     if (showHistory) loadHistory();
 }

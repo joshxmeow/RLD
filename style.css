@@ -43,8 +43,16 @@ body {
 .request-button { padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-main); cursor: pointer; }
 .approve-button { border-color: #00ff88; color: #00ff88; }
 .reject-button { border-color: #ff7070; color: #ff9999; }
-.app-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-bottom: 14px; font-size: 13px; }
-.app-toolbar .active-page { color: #fff; text-decoration: none; font-weight: bold; }
+.app-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; font-size: 13px; }
+.app-navigation { display: flex; align-items: center; gap: 5px; padding: 5px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(0, 0, 0, 0.22); }
+.nav-button, .logout-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid transparent; border-radius: 8px; color: var(--text-main); background: transparent; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease; }
+.nav-button:hover { color: #fff; background: rgba(0, 210, 255, 0.1); transform: translateY(-1px); }
+.nav-button:active, .logout-button:active { transform: scale(0.97); }
+.nav-button.active-page { color: #07121c; background: var(--accent); border-color: var(--accent); box-shadow: 0 3px 14px rgba(0, 210, 255, 0.25); }
+.nav-icon { font-size: 16px; line-height: 1; }
+.nav-button:focus-visible, .logout-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.logout-button { color: #ffb3b3; border-color: rgba(255, 112, 112, 0.3); }
+.logout-button:hover { color: #fff; background: rgba(255, 112, 112, 0.16); border-color: #ff7070; }
 .connection-status { margin-right: auto; font-weight: bold; }
 .connection-status.online { color: #00ff88; }
 .connection-status.offline { color: #ffcf70; }
@@ -66,6 +74,11 @@ body {
 .cloud-settings-form input { text-transform: none; font-weight: normal !important; }
 .cloud-settings-form .btn { padding: 9px; }
 .print-banner, .print-show, .print-only { display: none !important; }
+.page-enter { animation: page-enter 220ms ease-out both; }
+@keyframes page-enter {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 
 .header { text-align: center; margin-bottom: 20px; line-height: 1.4; }
 .header h2 { margin: 0; font-size: 24px; color: var(--accent); letter-spacing: 2px; }
@@ -117,9 +130,16 @@ th { background: rgba(255,255,255,0.05); color: var(--accent); font-size: 13px; 
     .account-create-form .btn { width: 100%; }
     .app-toolbar { flex-wrap: wrap; }
     .connection-status { width: 100%; }
+    .app-navigation { flex: 1 1 100%; order: 3; overflow-x: auto; }
+    .nav-button { flex: 1 0 auto; padding: 0 10px; }
+    .logout-button { margin-left: auto; }
     .history-row { grid-template-columns: 1fr; gap: 8px; }
     .cloud-settings-form { grid-template-columns: 1fr; }
     .cloud-settings-form label { grid-column: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
 /* --- EXACT PRINT REPLICA (8.5 x 13 inches) --- */
