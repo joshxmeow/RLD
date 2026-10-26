@@ -2,6 +2,7 @@
 const USERS_KEY = "rld.users.v1";
 const ACTIVE_USER_KEY = "rld.activeUser";
 const REMEMBERED_USER_KEY = "rld.rememberedUser";
+const REMEMBERED_CREDENTIAL_KEY = "rld.rememberedCredential";
 const ESTIMATES_KEY = "rld.estimates.v1";
 const CLOUD_URL_KEY = "rld.cloudScriptUrl";
 const ADMIN_USERNAME = "rld";
@@ -203,29 +204,52 @@ document.getElementById("loginForm").addEventListener("submit", async event => {
     event.preventDefault();
     const username = document.getElementById("loginUsername").value.trim().toLowerCase();
     const password = document.getElementById("loginPassword").value;
-    const remember = document.getElementById("rememberUsername").checked;
+    const remember = document.getElementById("rememberMe").checked;
+    const submitButton = event.currentTarget.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    setAuthMessage("Checking sign-in details...");
     try {
+        localStorage.removeItem(REMEMBERED_USER_KEY);
+        localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
         const passwordHash = await hashPassword(password);
         const isAdmin = username === ADMIN_USERNAME && passwordHash === ADMIN_PASSWORD_HASH;
-        const user = readUsers().find(item => item.username === username);
-        if (isAdmin) {
-            sessionStorage.setItem(ACTIVE_USER_KEY, ADMIN_USERNAME);
-        } else if (!user || user.passwordHash !== passwordHash) {
-            setAuthMessage("Incorrect username or password.");
+        const users = readUsers();
+        const user = users.find(item => item.username === username);
+        if (username === ADMIN_USERNAME && !isAdmin) {
+            setAuthMessage("Incorrect password for the admin username.");
             return;
-        } else if (user.status !== "approved") {
-            setAuthMessage("This account is not active. Ask an administrator to set its password.");
+        }
+        if (!isAdmin && !user) {
+            setAuthMessage("Username not found on this website. Ask the admin to create an account for this published site.");
             return;
-        } else {
-            sessionStorage.setItem(ACTIVE_USER_KEY, user.username);
+        }
+        if (!isAdmin && user.passwordHash !== passwordHash) {
+            setAuthMessage("Incorrect password for this username.");
+            return;
+        }
+        if (!isAdmin && user.status !== "approved") {
+            setAuthMessage("This account is not active. Ask the admin to set or reset its password.");
+            return;
         }
 
-        if (remember) localStorage.setItem(REMEMBERED_USER_KEY, username);
-        else localStorage.removeItem(REMEMBERED_USER_KEY);
+        const signedInUsername = isAdmin ? ADMIN_USERNAME : user.username;
+        sessionStorage.setItem(ACTIVE_USER_KEY, signedInUsername);
+        if (remember) {
+            localStorage.setItem(REMEMBERED_USER_KEY, signedInUsername);
+            localStorage.setItem(REMEMBERED_CREDENTIAL_KEY, JSON.stringify({
+                username: signedInUsername,
+                passwordHash
+            }));
+        } else {
+            localStorage.removeItem(REMEMBERED_USER_KEY);
+            localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
+        }
         document.getElementById("loginPassword").value = "";
-        showApp(isAdmin ? ADMIN_USERNAME : user.username);
+        showApp(signedInUsername);
     } catch (error) {
-        setAuthMessage(`Sign-in failed: ${error.message}`);
+        setAuthMessage(`Sign-in could not be checked: ${error.message}`);
+    } finally {
+        submitButton.disabled = false;
     }
 });
 
@@ -628,11 +652,29 @@ try {
     const rememberedUsername = localStorage.getItem(REMEMBERED_USER_KEY);
     if (rememberedUsername) {
         document.getElementById("loginUsername").value = rememberedUsername;
-        document.getElementById("rememberUsername").checked = true;
+        document.getElementById("rememberMe").checked = true;
+    }
+    const rememberedCredential = localStorage.getItem(REMEMBERED_CREDENTIAL_KEY);
+    if (rememberedCredential) {
+        const credential = JSON.parse(rememberedCredential);
+        const users = readUsers();
+        const rememberedUser = users.find(user => user.username === credential.username);
+        const isRememberedAdmin = credential.username === ADMIN_USERNAME &&
+            credential.passwordHash === ADMIN_PASSWORD_HASH;
+        const isRememberedUser = rememberedUser &&
+            rememberedUser.status === "approved" &&
+            rememberedUser.passwordHash === credential.passwordHash;
+        if (isRememberedAdmin || isRememberedUser) {
+            sessionStorage.setItem(ACTIVE_USER_KEY, credential.username);
+            showApp(credential.username);
+        } else {
+            localStorage.removeItem(REMEMBERED_CREDENTIAL_KEY);
+            localStorage.removeItem(REMEMBERED_USER_KEY);
+        }
     }
     const activeUsername = sessionStorage.getItem(ACTIVE_USER_KEY);
-    if (activeUsername === ADMIN_USERNAME || readUsers().some(user =>
-        user.username === activeUsername && user.status === "approved")) {
+    if (appContainer.hidden && (activeUsername === ADMIN_USERNAME || readUsers().some(user =>
+        user.username === activeUsername && user.status === "approved"))) {
         showApp(activeUsername);
     }
 } catch (error) {
