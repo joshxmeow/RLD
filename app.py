@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import re
 import secrets
 import socket
@@ -20,8 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 ROOT = Path(__file__).resolve().parent
-INSTANCE = ROOT / "instance"
-DB_PATH = INSTANCE / "rld.sqlite3"
+STORAGE_CONFIG_PATH = ROOT / "storage-config.json"
 ADMIN_USERNAME = "rld"
 ADMIN_PASSWORD = "rld2026"
 SERVER_PORT = 8443
@@ -30,6 +30,22 @@ PUBLIC_FILES = {
     "index.html", "style.css", "script.js", "manifest.webmanifest",
     "service-worker.js", "icon.svg", "header.png", "signature1.png", "signature2.png",
 }
+
+
+def resolve_data_dir(config_path=STORAGE_CONFIG_PATH):
+    configured_path = os.environ.get("RLD_DATA_DIR")
+    if not configured_path:
+        config_path = Path(config_path)
+        if config_path.exists():
+            try:
+                configuration = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Could not read storage configuration at {config_path}: {error}") from error
+            configured_path = configuration.get("data_dir") if isinstance(configuration, dict) else None
+            if not isinstance(configured_path, str) or not configured_path.strip():
+                raise RuntimeError(f"Storage configuration at {config_path} has no valid data_dir.")
+    data_dir = Path(configured_path).expanduser() if configured_path else ROOT / "instance"
+    return data_dir.resolve()
 
 
 def utc_now():
@@ -100,10 +116,12 @@ def init_db(database_path):
             )
 
 
-def create_app(database_path=DB_PATH, secret_key=None):
+def create_app(database_path=None, secret_key=None):
+    data_dir = Path(database_path).parent if database_path is not None else resolve_data_dir()
+    database_path = Path(database_path) if database_path is not None else data_dir / "rld.sqlite3"
     app = Flask(__name__)
     app.config.update(
-        SECRET_KEY=secret_key or load_secret_key(),
+        SECRET_KEY=secret_key or load_secret_key(data_dir),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -446,9 +464,9 @@ def make_estimate_pdf(record):
     return output
 
 
-def load_secret_key():
-    INSTANCE.mkdir(parents=True, exist_ok=True)
-    key_path = INSTANCE / "session-secret.key"
+def load_secret_key(data_dir):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    key_path = data_dir / "session-secret.key"
     if key_path.exists():
         return key_path.read_text(encoding="ascii").strip()
     secret = secrets.token_hex(32)
@@ -470,10 +488,12 @@ def local_ipv4():
 if __name__ == "__main__":
     from cert_setup import ensure_certificates
 
+    data_dir = resolve_data_dir()
     lan_ip = local_ipv4()
-    cert_path, key_path, ca_path = ensure_certificates(INSTANCE / "certs", lan_ip)
+    cert_path, key_path, ca_path = ensure_certificates(data_dir / "certs", lan_ip)
     app = create_app()
     print(f"RLD local server: https://{lan_ip}:{SERVER_PORT}")
     print(f"Install this CA certificate on phones: {ca_path}")
-    print("Keep the CA private key and instance folder private. Press Ctrl+C to stop.")
+    print(f"Estimate database and server keys are stored in: {data_dir}")
+    print("Keep this data folder private. Press Ctrl+C to stop.")
     app.run(host="0.0.0.0", port=SERVER_PORT, ssl_context=(str(cert_path), str(key_path)), threaded=True)

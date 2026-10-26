@@ -2,19 +2,28 @@
 
 The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi.
 
-## First-time Windows setup
+## First-time setup on the Windows server PC
 
-1. Install Python 3.11 or newer and make sure `python` works in Command Prompt or PowerShell.
-2. In the router, reserve a fixed LAN IP address for the Windows computer. Do this before installing the app on phones; the certificate and saved PWA address use that IP.
-3. Double-click `start_server.bat`. The first run creates `.venv`, installs the listed packages, creates the SQLite database and local HTTPS certificates, and starts the server.
-4. Allow Python through Windows Defender Firewall on **Private networks** when prompted. If no prompt appears, add a private-network inbound TCP rule for port **8443** in Windows Defender Firewall with Advanced Security.
-5. Keep the server computer awake and keep the command window running whenever phones need to sync. Open `https://<reserved-lan-ip>:8443` to confirm it is serving the app.
+The PC that runs this server is where the shared estimate database and accounts are stored. It can be a different PC from the one you use to browse or edit the website. It must stay powered on and connected to the same Wi-Fi as the phones when they need to sync.
+
+1. On the PC that should hold the shared data, install Python 3.11 or newer and make sure `python` works in Command Prompt or PowerShell.
+2. Copy this whole project folder to that PC. Keep the folder together; it contains the server program and website.
+3. In the router, reserve a fixed LAN IP address for this server PC. Do this before installing the app on phones; the certificate and saved PWA address use that IP.
+4. Double-click `start_server.bat`. On first run it creates `.venv`, installs the packages, and opens a folder picker. Choose the folder on this PC where the database and private server keys should live, for example `D:\RLD Autoworx Data`. The chosen folder is created/used when the server starts.
+5. Allow Python through Windows Defender Firewall on **Private networks** when prompted. If no prompt appears, add a private-network inbound TCP rule for port **8443** in Windows Defender Firewall with Advanced Security.
+6. Keep the server PC awake and keep the command window running whenever phones need to sync. Open `https://<reserved-lan-ip>:8443` from another device on the same Wi-Fi to confirm it is serving the app.
+
+To choose a different folder later, stop the server with Ctrl+C, double-click `configure_storage.bat` on the server PC, select the new folder, then start `start_server.bat` again. Changing the folder does **not** move existing data: the old folder is left intact, and the new folder starts with a new database unless you copy the old data files while the server is stopped. For a normal change of location, stop the server and copy `rld.sqlite3`, `session-secret.key`, and the entire `certs` folder into the new folder before restarting. Keep a separate backup.
+
+The selected folder is used for `rld.sqlite3`, `session-secret.key`, and `certs\`. Keep it private. Prefer a local drive in the server PC rather than a network share, USB drive, or cloud-synced folder; SQLite can be damaged if those locations disconnect or conflict. Use a separate backup process to copy the database when the server is stopped.
+
+Advanced users can set the `RLD_DATA_DIR` environment variable on the server PC to override the folder-picker setting. The override is only used by the process that inherits that environment variable.
 
 The first administrator account is `rld` with the initial password `rld2026`. Sign in while connected to the server and immediately change it in **Manage accounts → Change admin password**. Create each other user's account there; public sign-up is disabled.
 
 ## Install on Android and iPhone
 
-The generated CA certificate is printed in the server window and stored at `instance\certs\local-ca.crt`. Transfer **only the `.crt` certificate** to each phone using a trusted method. Never copy or share `local-ca-key.pem` or `server-key.pem`.
+The generated CA certificate is printed in the server window and stored at `<chosen-data-folder>\certs\local-ca.crt`. Transfer **only the `.crt` certificate** to each phone using a trusted method. Never copy or share `local-ca-key.pem` or `server-key.pem`.
 
 - **Android:** install the CA certificate from the phone's Security / Encryption & credentials settings (the wording varies by Android version). Open the HTTPS server address in Chrome, then choose **Install app** or **Add to Home screen**.
 - **iPhone:** open the certificate on the phone, install its configuration profile in Settings, then enable full trust for the RLD local CA under **Settings → General → About → Certificate Trust Settings**. Open the HTTPS address in Safari and choose **Share → Add to Home Screen**.
@@ -32,6 +41,6 @@ Only trust this private CA on devices you control. The browser should show a sec
 
 ## Data and backups
 
-Shared accounts, server-side estimates, and certificate/session secrets are under `instance\`. Back up `instance\rld.sqlite3` regularly to protected storage. Keep the `instance\certs` folder private as it contains the CA private key and server key; losing it requires re-trusting a newly generated CA on every phone.
+Shared accounts, server-side estimates, and certificate/session secrets are in the chosen data folder. Back up `<chosen-data-folder>\rld.sqlite3` regularly to protected storage. Keep the `certs` folder private as it contains the CA private key and server key; losing it requires re-trusting a newly generated CA on every phone.
 
 The server is intended for a trusted private Wi-Fi network. Do not expose port 8443 to the public internet.

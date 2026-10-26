@@ -1,8 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app import ADMIN_PASSWORD, ADMIN_USERNAME, create_app
+from app import ADMIN_PASSWORD, ADMIN_USERNAME, create_app, resolve_data_dir
 
 
 class LocalServerTests(unittest.TestCase):
@@ -23,6 +24,27 @@ class LocalServerTests(unittest.TestCase):
             base_url=self.base_url,
             json={"username": username, "password": password},
         )
+
+    def test_data_folder_can_be_configured_by_file_or_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "storage-config.json"
+            configured_dir = root / "chosen-data"
+            config_path.write_text(
+                '{"data_dir": "' + str(configured_dir).replace("\\", "\\\\") + '"}',
+                encoding="utf-8",
+            )
+            self.assertEqual(resolve_data_dir(config_path), configured_dir.resolve())
+
+            environment_dir = root / "environment-data"
+            with patch.dict("os.environ", {"RLD_DATA_DIR": str(environment_dir)}):
+                self.assertEqual(resolve_data_dir(config_path), environment_dir.resolve())
+                configured_app = create_app(database_path=None, secret_key="test-secret")
+                self.assertEqual(
+                    configured_app.config["DATABASE"],
+                    str((environment_dir / "rld.sqlite3").resolve()),
+                )
+                self.assertTrue((environment_dir / "rld.sqlite3").exists())
 
     def test_public_files_are_allowlisted(self):
         public_response = self.client.get("/", base_url=self.base_url)

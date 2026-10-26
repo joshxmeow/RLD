@@ -21,6 +21,13 @@ if errorlevel 1 (
     )
 )
 
+".venv\Scripts\python.exe" configure_storage.py --if-missing
+if errorlevel 1 (
+    echo Storage folder setup did not complete.
+    pause
+    exit /b 1
+)
+
 ".venv\Scripts\python.exe" app.py
 if errorlevel 1 (
     echo The local server stopped with an error.
