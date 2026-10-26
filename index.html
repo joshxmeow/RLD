@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RLD Autoworx | Job Estimate System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <datalist id="categorySuggestions">
+        <option value="* PARTS"></option>
+        <option value="* MECHANICAL WORKS"></option>
+        <option value="* TINSMITH"></option>
+        <option value="* PAINTING"></option>
+        <option value="* GLASSMAN WORKS"></option>
+        <option value="* TOWING FEE"></option>
+    </datalist>
+
+    <div class="container">
+        
+        <img src="header.png" alt="RLD Banner" class="print-banner">
+
+        <div class="header">
+            <h2 class="print-hide">RLD AUTOWORX AND TOWING SERVICES</h2>
+            <h3 class="print-show">RLD AUTOWORX AND TOWING SERVICES</h3>
+            <p>Brgy. Buli, Taal, Batangas</p>
+            <p>Contact No: 09296462336/09267433265/(043)321-8477</p>
+            <p>Email: rldcarpaintingservices@yahoo.com</p>
+            <p class="tin-no">TIN NO: 287-920-998-000</p>
+        </div>
+
+        <form id="estimateForm">
+            <div class="filename-setup no-print">
+                <div class="setup-row">
+                    <label>Organization / Fleet:</label>
+                    <input type="text" id="orgPrefix" placeholder="e.g. MGO TAAL, BRGY BULI (Leave blank if private)">
+                </div>
+                <div class="setup-row">
+                    <label>Job Keyword for File:</label>
+                    <input type="text" id="fileSuffix" placeholder="e.g. SHOCK, TOWING, COLLISION">
+                </div>
+            </div>
+
+            <div class="doc-title-row">
+                <div class="doc-title">JOB ESTIMATE</div>
+                <div class="doc-date">
+                    <label>DATE:</label>
+                    <input type="text" id="date" placeholder="e.g. October 25, 2026" required class="inline-input">
+                </div>
+            </div>
+
+            <table class="info-table">
+                <tr>
+                    <th style="width: 45%;">CLIENT</th>
+                    <th colspan="2" style="width: 55%;">VEHICLE</th>
+                </tr>
+                <tr>
+                    <td><div class="cell-flex"><label>NAME:</label> <input type="text" id="clientName"></div></td>
+                    <td style="width: 27%;"><div class="cell-flex"><label>MAKE & MODEL:</label> <input type="text" id="makeModel"></div></td>
+                    <td style="width: 28%;"><div class="cell-flex"><label>PLATE NO.:</label> <input type="text" id="plateNo"></div></td>
+                </tr>
+                <tr>
+                    <td><div class="cell-flex"><label>ADDRESS:</label> <input type="text" id="address"></div></td>
+                    <td><div class="cell-flex"><label>CHASSIS NO:</label> <input type="text" id="chassisNo"></div></td>
+                    <td><div class="cell-flex"><label>ENGINE NO.:</label> <input type="text" id="engineNo"></div></td>
+                </tr>
+                <tr>
+                    <td><div class="cell-flex"><label>CONTACT NUMBER:</label> <input type="text" id="contact"></div></td>
+                    <td><div class="cell-flex"><label>COLOR:</label> <input type="text" id="color"></div></td>
+                    <td><div class="cell-flex"><label>INSURANCE.:</label> <input type="text" id="insurance"></div></td>
+                </tr>
+            </table>
+
+            <div class="bundle-option no-print">
+                <label><input type="checkbox" id="bundleLabor" checked> Bundle a single labor charge across work items when printing (except * PARTS)</label>
+            </div>
+
+            <table id="worksTable">
+                <thead>
+                    <tr>
+                        <th style="width: 50%;">SCOPE OF WORKS</th>
+                        <th style="width: 25%;">COST OF LABOR</th>
+                        <th style="width: 25%;">COST OF PARTS</th>
+                    </tr>
+                </thead>
+                <tbody id="worksBody">
+                    <tr>
+                        <td>
+                            <div class="works-cell">
+                                <span class="row-num"></span>
+                                <input type="text" class="works-input" list="categorySuggestions">
+                            </div>
+                        </td>
+                        <!-- Changed to type="text" to accept PHP formatting -->
+                        <td><input type="text" class="cost-input labor-cost"></td>
+                        <td><input type="text" class="cost-input parts-cost"></td>
+                    </tr>
+                </tbody>
+                <tbody class="totals-section">
+                    <tr class="totals-row">
+                        <td class="totals-label">TOTAL LABOR/MATERIALS/PARTS:</td>
+                        <td><input type="text" id="totLabor" class="cost-input" readonly></td>
+                        <td><input type="text" id="totParts" class="cost-input" readonly></td>
+                    </tr>
+                    <tr class="totals-row">
+                        <td class="totals-label">DOWNPAYMENT:</td>
+                        <td colspan="2"><input type="text" id="downpayment" class="cost-input"></td>
+                    </tr>
+                    <tr class="totals-row">
+                        <td class="totals-label">TOTAL AMOUNT DUE:</td>
+                        <td colspan="2"><input type="text" id="totDue" class="cost-input" readonly></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="signatories print-only">
+                <div class="sig-block">
+                    <div class="sig-line">
+                        <img src="signature1.png" class="sig-image" alt="Beverly Signature">
+                    </div>
+                    <div>PREPARED BY: BEVERLY BALATBAT</div>
+                </div>
+                <div class="sig-block">
+                    <div class="sig-line">
+                        <img src="signature2.png" class="sig-image" alt="Roldan Signature">
+                    </div>
+                    <div>APPROVED BY: ROLDAN DUEÑAS</div>
+                </div>
+            </div>
+
+            <div class="terms-footer print-show">
+                <i>I HEREBY AUTHORIZE AND AGREE TO PAY FOR THE ABOVE REPAIRS AND WORK TO BE DONE ON MY VEHICLE INCLUDING ALL PARTS AND MATERIALS NECESSARY TO PERFORM THE SAME. I ALSO AGREE TO THE TERMS AND CONDITION STATED BELOW:</i><br>
+                1. <b>RLD AUTOWORX & TOWING SERVICES</b> will not be held responsible for any losses or damages to the vehicle and its accessories or any articles of value left in the vehicle in case of theft, fire, accident or any other cause beyond the auto center's control.<br>
+                2. Customer acknowledges an expenses mechanic lien to secure the amount of repairs thereto.<br>
+                3. Company employees may operate vehicle for purposes of testing inspection and /or deliver at customer's risk.<br>
+                4. No claims for damages to vehicle under this repair order will be considered unless received by the company within three (3) days after the vehicle has been delivered.<br>
+                5. Customers agrees to pay interest at the rate of 3% per month on all accounts not paid when due.<br>
+                6. <b>RLD AUTOWORX & TOWING SERVICES</b> will charge a daily storage fee of P300.00 on the vehicle from the day enter on the repair shop if not yet started of repair of vehicle.<br>
+                7. <b>RLD AUTOWORX & TOWING SERVICES</b> to charge a daily storage fee of P300.00 on the vehicle not claimed on the date of upon completion of repair.<br>
+                8. Hidden defects are not included in this evaluation<br>
+                9. Prices are subject to change without prior notice
+            </div>
+
+            <div class="buttons no-print">
+                <button type="button" class="btn btn-success" onclick="window.print()">PRINT DOCUMENT</button>
+                <button type="button" class="btn" id="saveBtn">SAVE TO CLOUD</button>
+            </div>
+        </form>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
