@@ -8,6 +8,40 @@
 </head>
 <body>
 
+    <main class="auth-shell" id="authShell">
+        <section class="auth-card" aria-labelledby="authTitle">
+            <h1 id="authTitle">RLD AUTOWORX</h1>
+            <p class="auth-subtitle">Offline job estimate system</p>
+
+            <form id="loginForm" class="auth-form">
+                <h2>Sign in</h2>
+                <label for="loginUsername">Username</label>
+                <input type="text" id="loginUsername" autocomplete="username" required>
+                <label for="loginPassword">Password</label>
+                <input type="password" id="loginPassword" autocomplete="current-password" required>
+                <label class="remember-option"><input type="checkbox" id="rememberUsername"> Remember username</label>
+                <button type="submit" class="btn btn-success">SIGN IN</button>
+                <button type="button" class="text-button" id="showSignup">Sign up</button>
+            </form>
+
+            <form id="signupForm" class="auth-form" hidden>
+                <h2>Request an account</h2>
+                <p class="auth-help">An administrator must approve your request before you can sign in.</p>
+                <label for="signupUsername">Username</label>
+                <input type="text" id="signupUsername" autocomplete="username" minlength="3" maxlength="30" required>
+                <label for="signupPassword">Password</label>
+                <input type="password" id="signupPassword" autocomplete="new-password" minlength="8" required>
+                <label for="signupConfirmPassword">Confirm password</label>
+                <input type="password" id="signupConfirmPassword" autocomplete="new-password" minlength="8" required>
+                <button type="submit" class="btn btn-success">SEND SIGN-UP REQUEST</button>
+                <button type="button" class="text-button" id="showLogin">Back to sign in</button>
+            </form>
+
+            <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
+            <p class="storage-note">Accounts, sign-up requests, and estimates stay in this browser on this device. This offline sign-in is a convenience gate, not secure protection for confidential data.</p>
+        </section>
+    </main>
+
     <datalist id="categorySuggestions">
         <option value="* PARTS"></option>
         <option value="* MECHANICAL WORKS"></option>
@@ -17,8 +51,18 @@
         <option value="* TOWING FEE"></option>
     </datalist>
 
-    <div class="container">
-        
+    <div class="container" id="appContainer" hidden>
+        <div class="app-toolbar no-print">
+            <span>Signed in as <strong id="activeUsername"></strong></span>
+            <button type="button" id="logoutBtn" class="text-button">Sign out</button>
+        </div>
+        <section id="adminPanel" class="admin-panel no-print" hidden>
+            <h2>Sign-up requests</h2>
+            <p class="auth-help">Approve requests to allow users to sign in.</p>
+            <div id="signupRequests"></div>
+            <p id="adminMessage" class="auth-message" role="status" aria-live="polite"></p>
+        </section>
+
         <img src="header.png" alt="RLD Banner" class="print-banner">
 
         <div class="header">
@@ -144,7 +188,7 @@
 
             <div class="buttons no-print">
                 <button type="button" class="btn btn-success" onclick="window.print()">PRINT DOCUMENT</button>
-                <button type="button" class="btn" id="saveBtn">SAVE TO CLOUD</button>
+                <button type="button" class="btn" id="saveBtn">SAVE OFFLINE</button>
             </div>
         </form>
     </div>

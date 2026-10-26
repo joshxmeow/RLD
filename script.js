@@ -1,5 +1,204 @@
 // script.js
-const APPS_SCRIPT_URL = "YOUR_APPS_SCRIPT_URL_HERE";
+const USERS_KEY = "rld.users.v1";
+const ACTIVE_USER_KEY = "rld.activeUser";
+const REMEMBERED_USER_KEY = "rld.rememberedUser";
+const ESTIMATES_KEY = "rld.estimates.v1";
+const ADMIN_USERNAME = "rld";
+const ADMIN_PASSWORD_HASH = "662e0514c2fd58527dca88e2d8b5776efa997e2f81d2cc09bf402c69a4e68efc";
+
+const authShell = document.getElementById("authShell");
+const appContainer = document.getElementById("appContainer");
+const authMessage = document.getElementById("authMessage");
+
+function setAuthMessage(message) {
+    authMessage.textContent = message;
+}
+
+function readUsers() {
+    const stored = localStorage.getItem(USERS_KEY);
+    if (stored === null) return [];
+    const users = JSON.parse(stored);
+    if (!Array.isArray(users)) throw new Error("Saved account data is invalid.");
+    return users;
+}
+
+async function hashPassword(password) {
+    if (!window.crypto || !window.crypto.subtle) {
+        throw new Error("Password protection is unavailable in this browser. Open this page in a supported browser.");
+    }
+    const bytes = new TextEncoder().encode(password);
+    const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function showApp(username) {
+    authShell.hidden = true;
+    appContainer.hidden = false;
+    document.getElementById("activeUsername").textContent = username;
+    const isAdmin = username === ADMIN_USERNAME;
+    document.getElementById("adminPanel").hidden = !isAdmin;
+    if (isAdmin) renderSignupRequests();
+}
+
+function showLogin() {
+    authShell.hidden = false;
+    appContainer.hidden = true;
+    sessionStorage.removeItem(ACTIVE_USER_KEY);
+    setAuthMessage("");
+}
+
+function renderSignupRequests() {
+    const requests = document.getElementById("signupRequests");
+    requests.replaceChildren();
+    let users;
+    try {
+        users = readUsers();
+    } catch (error) {
+        requests.textContent = `Could not load sign-up requests: ${error.message}`;
+        return;
+    }
+    const pendingUsers = users.filter(user => user.status === "pending");
+    if (pendingUsers.length === 0) {
+        requests.textContent = "No pending sign-up requests.";
+        return;
+    }
+
+    pendingUsers.forEach(user => {
+        const row = document.createElement("div");
+        row.className = "request-row";
+        const username = document.createElement("strong");
+        username.textContent = user.username;
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "request-button approve-button";
+        approve.textContent = "Approve";
+        approve.addEventListener("click", () => updateSignupRequest(user.username, "approved"));
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "request-button reject-button";
+        reject.textContent = "Reject";
+        reject.addEventListener("click", () => updateSignupRequest(user.username, "rejected"));
+        row.append(username, approve, reject);
+        requests.appendChild(row);
+    });
+}
+
+function updateSignupRequest(username, status) {
+    try {
+        const users = readUsers();
+        const user = users.find(item => item.username === username && item.status === "pending");
+        if (!user) {
+            document.getElementById("adminMessage").textContent = "That request is no longer pending.";
+            renderSignupRequests();
+            return;
+        }
+        if (status === "approved") {
+            user.status = "approved";
+            localStorage.setItem(USERS_KEY, JSON.stringify(users));
+            document.getElementById("adminMessage").textContent = `${username} was approved.`;
+        } else {
+            localStorage.setItem(USERS_KEY, JSON.stringify(users.filter(item => item.username !== username)));
+            document.getElementById("adminMessage").textContent = `${username}'s request was rejected.`;
+        }
+        renderSignupRequests();
+    } catch (error) {
+        document.getElementById("adminMessage").textContent = `Could not update the request: ${error.message}`;
+    }
+}
+
+document.getElementById("showSignup").addEventListener("click", () => {
+    document.getElementById("loginForm").hidden = true;
+    document.getElementById("signupForm").hidden = false;
+    setAuthMessage("");
+});
+
+document.getElementById("showLogin").addEventListener("click", () => {
+    document.getElementById("signupForm").hidden = true;
+    document.getElementById("loginForm").hidden = false;
+    setAuthMessage("");
+});
+
+document.getElementById("loginForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const username = document.getElementById("loginUsername").value.trim().toLowerCase();
+    const password = document.getElementById("loginPassword").value;
+    const remember = document.getElementById("rememberUsername").checked;
+    try {
+        const passwordHash = await hashPassword(password);
+        const isAdmin = username === ADMIN_USERNAME && passwordHash === ADMIN_PASSWORD_HASH;
+        const user = readUsers().find(item => item.username === username);
+        if (isAdmin) {
+            sessionStorage.setItem(ACTIVE_USER_KEY, ADMIN_USERNAME);
+        } else if (!user || user.passwordHash !== passwordHash) {
+            setAuthMessage("Incorrect username or password.");
+            return;
+        } else if (user.status !== "approved") {
+            setAuthMessage("Your sign-up request is still waiting for admin approval.");
+            return;
+        } else {
+            sessionStorage.setItem(ACTIVE_USER_KEY, user.username);
+        }
+
+        if (remember) localStorage.setItem(REMEMBERED_USER_KEY, username);
+        else localStorage.removeItem(REMEMBERED_USER_KEY);
+        document.getElementById("loginPassword").value = "";
+        showApp(isAdmin ? ADMIN_USERNAME : user.username);
+    } catch (error) {
+        setAuthMessage(`Sign-in failed: ${error.message}`);
+    }
+});
+
+document.getElementById("signupForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const username = document.getElementById("signupUsername").value.trim().toLowerCase();
+    const password = document.getElementById("signupPassword").value;
+    const confirmPassword = document.getElementById("signupConfirmPassword").value;
+    if (!/^[a-z0-9._-]{3,30}$/.test(username)) {
+        setAuthMessage("Use 3-30 characters: lowercase letters, numbers, dots, underscores, or hyphens.");
+        return;
+    }
+    if (username === ADMIN_USERNAME) {
+        setAuthMessage("That username is reserved.");
+        return;
+    }
+    if (password !== confirmPassword) {
+        setAuthMessage("The passwords do not match.");
+        return;
+    }
+    try {
+        const users = readUsers();
+        if (users.some(user => user.username === username)) {
+            setAuthMessage("That username already has an account or request.");
+            return;
+        }
+        const passwordHash = await hashPassword(password);
+        users.push({ username, passwordHash, status: "pending" });
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        document.getElementById("signupForm").reset();
+        document.getElementById("signupForm").hidden = true;
+        document.getElementById("loginForm").hidden = false;
+        setAuthMessage("Sign-up request sent. The admin must approve it before you can sign in.");
+    } catch (error) {
+        setAuthMessage(`Could not submit your request: ${error.message}`);
+    }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", showLogin);
+
+try {
+    const rememberedUsername = localStorage.getItem(REMEMBERED_USER_KEY);
+    if (rememberedUsername) {
+        document.getElementById("loginUsername").value = rememberedUsername;
+        document.getElementById("rememberUsername").checked = true;
+    }
+    const activeUsername = sessionStorage.getItem(ACTIVE_USER_KEY);
+    if (activeUsername === ADMIN_USERNAME || readUsers().some(user =>
+        user.username === activeUsername && user.status === "approved")) {
+        showApp(activeUsername);
+    }
+} catch (error) {
+    setAuthMessage(`Local account storage is unavailable: ${error.message}`);
+}
 
 const learnedRepairs = [
     "PULLOUT & REPLACE FRONT SHOCK ABSORBER SET", "PULLOUT & REPLACE LOWER BALL JOINT SET",
@@ -208,11 +407,8 @@ window.addEventListener('afterprint', () => {
     document.querySelectorAll('.print-merged-source').forEach(cell => cell.classList.remove('print-merged-source'));
 });
 
-// --- SAVE DATA TO CLOUD ---
-document.getElementById('saveBtn').addEventListener('click', async function() {
-    const btn = this;
-    const originalText = btn.innerText;
-    
+// --- SAVE DATA OFFLINE ---
+document.getElementById('saveBtn').addEventListener('click', function() {
     const data = {
         date: document.getElementById('date').value,
         orgPrefix: document.getElementById('orgPrefix').value,
@@ -249,27 +445,18 @@ document.getElementById('saveBtn').addEventListener('click', async function() {
         }
     });
 
-    if (APPS_SCRIPT_URL === "YOUR_APPS_SCRIPT_URL_HERE") {
-        alert("Please deploy the Google Apps Script and update the URL in script.js to save data.");
-        return;
-    }
-
-    btn.innerText = "SAVING...";
-    btn.disabled = true;
-
     try {
-        const response = await fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            body: JSON.stringify(data),
-            headers: { "Content-Type": "text/plain;charset=utf-8" }
+        const saved = localStorage.getItem(ESTIMATES_KEY);
+        const estimates = saved === null ? [] : JSON.parse(saved);
+        if (!Array.isArray(estimates)) throw new Error("Saved estimate data is invalid.");
+        estimates.push({
+            savedAt: new Date().toISOString(),
+            username: sessionStorage.getItem(ACTIVE_USER_KEY),
+            data
         });
-        const result = await response.json();
-        if (result.status === "success") alert("Success! Saved to Google Drive.");
+        localStorage.setItem(ESTIMATES_KEY, JSON.stringify(estimates));
+        alert("Estimate saved in this browser on this device.");
     } catch (error) {
-        console.error("Error:", error);
-        alert("Saved successfully.");
-    } finally {
-        btn.innerText = originalText;
-        btn.disabled = false;
+        alert(`Could not save this estimate offline: ${error.message}`);
     }
 });
