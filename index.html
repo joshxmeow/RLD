@@ -18,7 +18,7 @@
                 <label for="loginUsername">Username</label>
                 <input type="text" id="loginUsername" autocomplete="username" required>
                 <label for="loginPassword">Password</label>
-                <input type="password" id="loginPassword" autocomplete="current-password" required>
+                <input type="password" id="loginPassword" autocomplete="current-password" autocapitalize="none" spellcheck="false" required>
                 <label class="remember-option"><input type="checkbox" id="rememberUsername"> Remember username</label>
                 <button type="submit" class="btn btn-success">SIGN IN</button>
                 <button type="button" class="text-button" id="showSignup">Sign up</button>
@@ -30,9 +30,9 @@
                 <label for="signupUsername">Username</label>
                 <input type="text" id="signupUsername" autocomplete="username" minlength="3" maxlength="30" required>
                 <label for="signupPassword">Password</label>
-                <input type="password" id="signupPassword" autocomplete="new-password" minlength="8" required>
+                <input type="password" id="signupPassword" autocomplete="new-password" autocapitalize="none" spellcheck="false" minlength="8" required>
                 <label for="signupConfirmPassword">Confirm password</label>
-                <input type="password" id="signupConfirmPassword" autocomplete="new-password" minlength="8" required>
+                <input type="password" id="signupConfirmPassword" autocomplete="new-password" autocapitalize="none" spellcheck="false" minlength="8" required>
                 <button type="submit" class="btn btn-success">SEND SIGN-UP REQUEST</button>
                 <button type="button" class="text-button" id="showLogin">Back to sign in</button>
             </form>

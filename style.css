@@ -23,6 +23,7 @@ body {
 .auth-form h2, .admin-panel h2 { margin: 0 0 6px; color: var(--accent); font-size: 18px; }
 .auth-form > label:not(.remember-option) { font-size: 13px; }
 .auth-form input:not([type="checkbox"]) { text-transform: none; font-weight: normal !important; }
+.auth-form input[type="password"] { text-transform: none !important; }
 .auth-form .btn { flex: initial; width: 100%; margin-top: 8px; }
 .remember-option { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .remember-option input { width: auto; }
