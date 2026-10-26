@@ -11,6 +11,10 @@ let serverAuthenticated = false;
 let serverReachable = false;
 let installPromptEvent = null;
 
+function apiUrl(path) {
+    return new URL(path.replace(/^\/+/, ""), document.baseURI);
+}
+
 const authShell = document.getElementById("authShell");
 const appContainer = document.getElementById("appContainer");
 const authMessage = document.getElementById("authMessage");
@@ -57,7 +61,7 @@ async function apiRequest(path, options = {}) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     try {
-        const response = await fetch(path, {
+        const response = await fetch(apiUrl(path), {
             credentials: "same-origin",
             ...options,
             headers: {
@@ -624,7 +628,7 @@ function renderHistory() {
         if (estimate.syncStatus === "synced") {
             const open = document.createElement("a");
             open.className = "request-button history-action";
-            open.href = `/api/estimates/${encodeURIComponent(estimate.id)}/pdf`;
+            open.href = apiUrl(`/api/estimates/${encodeURIComponent(estimate.id)}/pdf`);
             open.target = "_blank";
             open.rel = "noopener";
             open.textContent = "Download PDF";
@@ -746,7 +750,7 @@ document.getElementById("installAppBtn").addEventListener("click", async () => {
 });
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("/service-worker.js").catch(error => {
+    navigator.serviceWorker.register("service-worker.js").catch(error => {
         const message = `Offline app setup failed: ${error.message}`;
         if (appContainer.hidden) setAuthMessage(message);
         else document.getElementById("historyMessage").textContent = message;

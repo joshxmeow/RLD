@@ -1,15 +1,17 @@
-const CACHE_NAME = "rld-estimates-shell-v4";
+const CACHE_NAME = "rld-estimates-shell-v5";
+const APP_BASE = new URL("./", self.registration.scope);
 const APP_SHELL = [
-    "/",
-    "/index.html",
-    "/style.css",
-    "/script.js",
-    "/manifest.webmanifest",
-    "/icon.svg",
-    "/header.png",
-    "/signature1.png",
-    "/signature2.png"
-];
+    "",
+    "index.html",
+    "style.css",
+    "script.js",
+    "manifest.webmanifest",
+    "icon.svg",
+    "header.png",
+    "signature1.png",
+    "signature2.png"
+].map(path => new URL(path, APP_BASE));
+const API_PATH = new URL("api/", APP_BASE).pathname;
 
 self.addEventListener("install", event => {
     event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
@@ -27,12 +29,12 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
     const request = event.request;
     const url = new URL(request.url);
-    if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
+    if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith(API_PATH)) {
         return;
     }
 
     if (request.mode === "navigate") {
-        event.respondWith(fetch(request).catch(() => caches.match("/index.html")));
+        event.respondWith(fetch(request).catch(() => caches.match(new URL("index.html", APP_BASE))));
         return;
     }
 
