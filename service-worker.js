@@ -1,4 +1,4 @@
-const CACHE_NAME = "rld-estimates-shell-v8";
+const CACHE_NAME = "rld-estimates-shell-v14";
 const APP_BASE = new URL("./", self.registration.scope);
 const APP_SHELL = [
     "",
@@ -6,7 +6,7 @@ const APP_SHELL = [
     "style.css",
     "script.js",
     "manifest.webmanifest",
-    "icon.svg",
+    "rld_logo.png",
     "header.png",
     "signature1.png",
     "signature2.png"

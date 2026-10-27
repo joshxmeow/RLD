@@ -59,6 +59,7 @@ if (Test-NetConnection -ComputerName 127.0.0.1 -Port 8443 -InformationLevel Quie
 $managedFiles = @(
     "README.md", "app.py", "cert_setup.py", "configure_storage.bat", "configure_storage.py",
     "header.png", "icon.svg", "index.html", "manifest.webmanifest", "requirements.txt",
+    "rld_logo.png",
     "script.js", "service-worker.js", "signature1.png", "signature2.png", "start_server.bat",
     "style.css", "autostart_task.ps1", "install_autostart.bat", "remove_autostart.bat",
     "start_server_hidden.vbs", "update_server.bat", "update_server.ps1",
@@ -66,6 +67,7 @@ $managedFiles = @(
 )
 $requiredFiles = @(
     "app.py", "cert_setup.py", "configure_storage.py", "header.png", "icon.svg",
+    "rld_logo.png",
     "index.html", "manifest.webmanifest", "requirements.txt", "script.js",
     "service-worker.js", "signature1.png", "signature2.png", "start_server.bat", "style.css"
 )

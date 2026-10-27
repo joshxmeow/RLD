@@ -4,8 +4,13 @@ const ACTIVE_USER_KEY = "rld.activeUser";
 const REMEMBERED_USER_KEY = "rld.rememberedUser";
 const REMEMBERED_CREDENTIAL_KEY = "rld.rememberedCredential";
 const ESTIMATES_KEY = "rld.estimates.v1";
+const THEME_KEY = "rld.theme";
 const ADMIN_USERNAME = "rld";
+const UNIT_MAKERS = ["Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan"];
 let editingEstimateId = null;
+let editingUnitId = null;
+let units = [];
+let unitSwipeStart = null;
 let syncQueueRunning = false;
 let serverAuthenticated = false;
 let serverReachable = false;
@@ -14,6 +19,19 @@ let installPromptEvent = null;
 function apiUrl(path) {
     return new URL(path.replace(/^\/+/, ""), document.baseURI);
 }
+
+function applyTheme(isLight) {
+    document.documentElement.dataset.theme = isLight ? "light" : "dark";
+    document.getElementById("themeToggle").checked = isLight;
+    document.querySelector('meta[name="theme-color"]').content = isLight ? "#f4f7fb" : "#0b0f19";
+}
+
+applyTheme(localStorage.getItem(THEME_KEY) === "light");
+document.getElementById("themeToggle").addEventListener("change", event => {
+    const isLight = event.currentTarget.checked;
+    localStorage.setItem(THEME_KEY, isLight ? "light" : "dark");
+    applyTheme(isLight);
+});
 
 const authShell = document.getElementById("authShell");
 const appContainer = document.getElementById("appContainer");
@@ -119,12 +137,15 @@ function showPage(page) {
     const isAdmin = sessionStorage.getItem(ACTIVE_USER_KEY) === ADMIN_USERNAME;
     const showAdmin = page === "admin" && isAdmin;
     const showHistory = page === "history";
-    const activePage = showAdmin ? "admin" : showHistory ? "history" : "estimate";
-    document.getElementById("estimatePage").hidden = showAdmin || showHistory;
+    const showUnits = page === "units";
+    const activePage = showAdmin ? "admin" : showHistory ? "history" : showUnits ? "units" : "estimate";
+    document.getElementById("estimatePage").hidden = showAdmin || showHistory || showUnits;
+    document.getElementById("unitsPage").hidden = !showUnits;
     document.getElementById("adminPage").hidden = !showAdmin;
     document.getElementById("historyPage").hidden = !showHistory;
     const navigationPages = {
         estimate: ["showEstimatePage", "estimatePage"],
+        units: ["showUnitsPage", "unitsPage"],
         history: ["showHistoryPage", "historyPage"],
         admin: ["showAdminPage", "adminPage"]
     };
@@ -143,6 +164,7 @@ function showPage(page) {
     });
     if (showAdmin) renderAccounts();
     if (showHistory) loadHistory();
+    if (showUnits) loadUnits();
 }
 
 function readEstimates() {
@@ -299,6 +321,7 @@ function deleteUser(username) {
 }
 
 document.getElementById("showEstimatePage").addEventListener("click", () => showPage("estimate"));
+document.getElementById("showUnitsPage").addEventListener("click", () => showPage("units"));
 document.getElementById("showHistoryPage").addEventListener("click", () => showPage("history"));
 document.getElementById("showAdminPage").addEventListener("click", () => showPage("admin"));
 
@@ -619,6 +642,226 @@ function getStatusLabel(estimate) {
     }
 }
 
+function formatUnitPrice(price) {
+    return `PHP ${Number(price).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function renderUnits() {
+    const list = document.getElementById("unitList");
+    const searchTerm = document.getElementById("unitSearch").value.trim().toLocaleLowerCase();
+    list.replaceChildren();
+    const matchingUnits = units.filter(unit => {
+        const searchText = [
+            unit.maker, unit.unit, unit.transmission, unit.plateNo,
+            unit.yearModel, unit.fuelType, unit.sellingPrice
+        ].join(" ").toLocaleLowerCase();
+        return searchText.includes(searchTerm);
+    });
+    if (matchingUnits.length === 0) {
+        list.textContent = searchTerm ? "No units match your search." : "No units have been added yet.";
+        return;
+    }
+
+    UNIT_MAKERS.forEach(maker => {
+        const makerUnits = matchingUnits.filter(unit => unit.maker === maker);
+        if (makerUnits.length === 0) return;
+        const section = document.createElement("section");
+        section.className = "unit-maker-section";
+        const heading = document.createElement("h2");
+        heading.textContent = maker;
+        section.appendChild(heading);
+
+        makerUnits.forEach(unit => {
+            const card = document.createElement("article");
+            card.className = "unit-card";
+            card.dataset.unitId = unit.id;
+            const titleRow = document.createElement("div");
+            titleRow.className = "unit-card-heading";
+            const title = document.createElement("h3");
+            title.textContent = unit.unit;
+            titleRow.appendChild(title);
+            const status = document.createElement("button");
+            status.type = "button";
+            status.className = `unit-availability ${unit.available ? "available" : "unavailable"}`;
+            status.textContent = unit.available ? "Available" : "Unavailable";
+            status.setAttribute("aria-label", `${status.textContent}. Toggle availability for ${unit.unit}`);
+            status.addEventListener("click", () => toggleUnitAvailability(unit));
+            titleRow.appendChild(status);
+
+            const details = document.createElement("dl");
+            details.className = "unit-details";
+            [
+                ["Transmission", unit.transmission],
+                ["Plate no.", unit.plateNo],
+                ["Year model", unit.yearModel],
+                ["Fuel type", unit.fuelType]
+            ].forEach(([label, value]) => {
+                const item = document.createElement("div");
+                const term = document.createElement("dt");
+                term.textContent = label;
+                const description = document.createElement("dd");
+                description.textContent = value;
+                item.append(term, description);
+                details.appendChild(item);
+            });
+            const footer = document.createElement("div");
+            footer.className = "unit-card-footer";
+            const price = document.createElement("strong");
+            price.className = "unit-price";
+            price.textContent = formatUnitPrice(unit.sellingPrice);
+            const edit = document.createElement("button");
+            edit.type = "button";
+            edit.className = "request-button";
+            edit.textContent = "Edit";
+            edit.addEventListener("click", () => beginUnitEdit(unit));
+            footer.append(price, edit);
+            card.append(titleRow, details, footer);
+            section.appendChild(card);
+        });
+        list.appendChild(section);
+    });
+}
+
+async function loadUnits() {
+    const message = document.getElementById("unitsMessage");
+    try {
+        const result = await apiRequest("/api/units");
+        units = result.units;
+        message.textContent = "";
+        renderUnits();
+    } catch (error) {
+        units = [];
+        message.textContent = `Could not load the unit price list: ${error.message}`;
+        if (error.status === 401) serverAuthenticated = false;
+        renderUnits();
+    }
+}
+
+function beginUnitEdit(unit = null) {
+    const form = document.getElementById("unitForm");
+    editingUnitId = unit ? unit.id : null;
+    document.getElementById("unitFormTitle").textContent = unit ? `Edit ${unit.unit}` : "Add unit";
+    document.getElementById("unitMaker").value = unit ? unit.maker : UNIT_MAKERS[0];
+    document.getElementById("unitName").value = unit ? unit.unit : "";
+    document.getElementById("unitTransmission").value = unit ? unit.transmission : "";
+    document.getElementById("unitPlateNo").value = unit ? unit.plateNo : "";
+    document.getElementById("unitYearModel").value = unit ? unit.yearModel : "";
+    document.getElementById("unitFuelType").value = unit ? unit.fuelType : "";
+    document.getElementById("unitSellingPrice").value = unit ? unit.sellingPrice : "";
+    document.getElementById("unitAvailability").value = String(unit ? unit.available : true);
+    document.getElementById("deleteUnitBtn").hidden = !unit;
+    document.getElementById("unitForm").querySelector('[type="submit"]').textContent =
+        unit ? "Save changes" : "Save unit";
+    form.hidden = false;
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("unitName").focus({ preventScroll: true });
+}
+
+function closeUnitEditor() {
+    document.getElementById("unitForm").hidden = true;
+    editingUnitId = null;
+}
+
+function unitFormData() {
+    return {
+        maker: document.getElementById("unitMaker").value,
+        unit: document.getElementById("unitName").value.trim(),
+        transmission: document.getElementById("unitTransmission").value.trim(),
+        plateNo: document.getElementById("unitPlateNo").value.trim(),
+        yearModel: Number(document.getElementById("unitYearModel").value),
+        fuelType: document.getElementById("unitFuelType").value.trim(),
+        sellingPrice: Number(document.getElementById("unitSellingPrice").value),
+        available: document.getElementById("unitAvailability").value === "true"
+    };
+}
+
+async function saveUnit(event) {
+    event.preventDefault();
+    const message = document.getElementById("unitsMessage");
+    const submit = document.getElementById("unitForm").querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+        const result = await apiRequest(
+            editingUnitId ? `/api/units/${encodeURIComponent(editingUnitId)}` : "/api/units",
+            { method: editingUnitId ? "PUT" : "POST", body: JSON.stringify(unitFormData()) }
+        );
+        if (editingUnitId) {
+            units = units.map(unit => unit.id === editingUnitId ? result.unit : unit);
+        } else {
+            units.push(result.unit);
+        }
+        closeUnitEditor();
+        renderUnits();
+        message.textContent = `${result.unit.unit} was saved.`;
+    } catch (error) {
+        message.textContent = `Could not save the unit: ${error.message}`;
+        if (error.status === 401) serverAuthenticated = false;
+    } finally {
+        submit.disabled = false;
+    }
+}
+
+async function toggleUnitAvailability(unit) {
+    const message = document.getElementById("unitsMessage");
+    const updatedUnit = { ...unit, available: !unit.available };
+    try {
+        const result = await apiRequest(`/api/units/${encodeURIComponent(unit.id)}`, {
+            method: "PUT",
+            body: JSON.stringify(updatedUnit)
+        });
+        units = units.map(item => item.id === unit.id ? result.unit : item);
+        renderUnits();
+        message.textContent = `${unit.unit} marked ${result.unit.available ? "available" : "unavailable"}.`;
+    } catch (error) {
+        message.textContent = `Could not update availability: ${error.message}`;
+        if (error.status === 401) serverAuthenticated = false;
+    }
+}
+
+async function deleteUnit() {
+    const unit = units.find(item => item.id === editingUnitId);
+    if (!unit || !window.confirm(`Delete "${unit.unit}" from the unit price list?`)) return;
+    const message = document.getElementById("unitsMessage");
+    try {
+        await apiRequest(`/api/units/${encodeURIComponent(unit.id)}`, { method: "DELETE" });
+        units = units.filter(item => item.id !== unit.id);
+        closeUnitEditor();
+        renderUnits();
+        message.textContent = `${unit.unit} was deleted.`;
+    } catch (error) {
+        message.textContent = `Could not delete the unit: ${error.message}`;
+        if (error.status === 401) serverAuthenticated = false;
+    }
+}
+
+document.getElementById("addUnitBtn").addEventListener("click", () => beginUnitEdit());
+document.getElementById("unitForm").addEventListener("submit", saveUnit);
+document.getElementById("cancelUnitEdit").addEventListener("click", closeUnitEditor);
+document.getElementById("deleteUnitBtn").addEventListener("click", deleteUnit);
+document.getElementById("unitSearchForm").addEventListener("submit", event => {
+    event.preventDefault();
+    renderUnits();
+});
+document.getElementById("unitSearch").addEventListener("input", renderUnits);
+document.getElementById("unitList").addEventListener("pointerdown", event => {
+    if (event.pointerType !== "touch" || event.target.closest("button")) return;
+    const card = event.target.closest(".unit-card");
+    if (card) unitSwipeStart = { id: card.dataset.unitId, x: event.clientX, y: event.clientY };
+});
+document.getElementById("unitList").addEventListener("pointerup", event => {
+    if (!unitSwipeStart || event.pointerType !== "touch") return;
+    const start = unitSwipeStart;
+    unitSwipeStart = null;
+    const deltaX = event.clientX - start.x;
+    const deltaY = Math.abs(event.clientY - start.y);
+    if (deltaX < 60 || deltaY > 50) return;
+    const unit = units.find(item => item.id === start.id);
+    if (unit) toggleUnitAvailability(unit);
+});
+document.getElementById("unitList").addEventListener("pointercancel", () => {
+    unitSwipeStart = null;
+});
+
 function renderHistory() {
     const list = document.getElementById("historyList");
     list.replaceChildren();
@@ -632,6 +875,7 @@ function renderHistory() {
                 const searchableText = [
                     getHistoryTitle(estimate),
                     estimate.data.date,
+                    formatEstimateDate(estimate.data.date),
                     estimate.username
                 ].join(" ").toLocaleUpperCase();
                 return searchableText.includes(searchTerm);
@@ -653,7 +897,7 @@ function renderHistory() {
         title.textContent = getHistoryTitle(estimate);
         const meta = document.createElement("div");
         meta.className = "history-meta";
-        meta.textContent = `${estimate.data.date || "No date"} · ${estimate.username || "Unknown user"}`;
+        meta.textContent = `${formatEstimateDate(estimate.data.date) || "No date"} · ${estimate.username || "Unknown user"}`;
         details.append(title, meta);
         const status = document.createElement("span");
         const [label, className] = getStatusLabel(estimate);
@@ -710,8 +954,11 @@ function editEstimate(estimate) {
             ? ""
             : `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}-${String(parsedDate.getDate()).padStart(2, "0")}`;
     }
+    updateDateDisplay();
     document.getElementById("bundleLabor").checked = data.bundleLabor !== false;
     document.getElementById("bundleAllPrices").checked = data.bundleAllPrices === true;
+    document.getElementById("noteHiddenDamage").checked = data.noteHiddenDamage === true;
+    updateHiddenDamageNote();
     const tbody = document.getElementById("worksBody");
     tbody.replaceChildren();
     (data.works || []).forEach(work => {
@@ -736,6 +983,45 @@ function editEstimate(estimate) {
 function getLocalDateString(date = new Date()) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
+
+function formatEstimateDate(dateValue) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateValue || ""));
+    if (!match) return "";
+    const [, year, month, day] = match;
+    return new Date(Number(year), Number(month) - 1, Number(day))
+        .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+        .toLocaleUpperCase();
+}
+
+function updateDateDisplay() {
+    const dateInput = document.getElementById("date");
+    document.getElementById("dateDisplay").textContent = formatEstimateDate(dateInput.value);
+}
+
+function ensureEstimateDate() {
+    const dateInput = document.getElementById("date");
+    if (!dateInput.value) dateInput.value = getLocalDateString();
+    updateDateDisplay();
+}
+
+document.getElementById("date").addEventListener("input", updateDateDisplay);
+document.getElementById("date").addEventListener("change", updateDateDisplay);
+document.getElementById("pickDateBtn").addEventListener("click", () => {
+    const dateInput = document.getElementById("date");
+    if (typeof dateInput.showPicker === "function") dateInput.showPicker();
+    else {
+        dateInput.focus();
+        dateInput.click();
+    }
+});
+ensureEstimateDate();
+
+function updateHiddenDamageNote() {
+    document.getElementById("estimateNoteBody").hidden =
+        !document.getElementById("noteHiddenDamage").checked;
+}
+
+document.getElementById("noteHiddenDamage").addEventListener("change", updateHiddenDamageNote);
 
 function deleteEstimate(estimate) {
     if (!window.confirm(`Delete "${getHistoryTitle(estimate)}" from history and the local server?`)) return;
@@ -1084,77 +1370,365 @@ function cleanupPrintLayout() {
 
 window.addEventListener('afterprint', cleanupPrintLayout);
 document.getElementById("printBtn").addEventListener("click", printEstimate);
+document.getElementById("saveImageBtn").addEventListener("click", saveEstimateImage);
 
 function printEstimate() {
-    const isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
-        navigator.standalone === true;
-    const isPhone = /Android|iPhone|iPod|iPad/i.test(navigator.userAgent);
-    if (!isStandalone || !isPhone) {
-        window.print();
-        return;
-    }
+    ensureEstimateDate();
+    window.print();
+}
 
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-        document.getElementById("estimateMessage").textContent =
-            "The browser blocked the print window. Open this app in your browser and tap Print Document again.";
-        window.print();
-        return;
+function getEstimateImage(selector) {
+    const image = document.querySelector(selector);
+    if (!image || !image.complete || !image.naturalWidth) {
+        throw new Error(`Could not load ${image && image.alt || "an estimate image"}. Try again in a moment.`);
     }
+    return image;
+}
 
-    mergeSingleCostsForPrint();
-    const estimate = document.getElementById("estimatePage").cloneNode(true);
-    estimate.querySelectorAll("input").forEach(input => {
-        input.setAttribute("value", input.value);
-        if (input.checked) input.setAttribute("checked", "");
-        else input.removeAttribute("checked");
+function wrapCanvasText(context, value, maxWidth) {
+    const lines = [];
+    String(value || "").split(/\s+/).forEach(word => {
+        if (!word) return;
+        const current = lines[lines.length - 1];
+        const candidate = current ? `${current} ${word}` : word;
+        if (current && context.measureText(candidate).width > maxWidth) lines.push(word);
+        else if (current) lines[lines.length - 1] = candidate;
+        else lines.push(word);
     });
-    cleanupPrintLayout();
+    return lines.length ? lines : [""];
+}
 
-    const printDocument = printWindow.document;
-    printDocument.open();
-    printDocument.write("<!doctype html><html><head><meta charset=\"utf-8\"><title>RLD Estimate</title></head><body></body></html>");
-    printDocument.close();
+function getPrintableWorkRows(data) {
+    const output = [];
+    let section = [];
+    const flushSection = () => {
+        if (section.length === 0) return;
+        if (data.bundleAllPrices) {
+            const laborTotal = section.reduce((sum, work) => sum + work.labor, 0);
+            const partsTotal = section.reduce((sum, work) => sum + work.parts, 0);
+            section = section.map((work, index) => ({
+                ...work,
+                labor: index === 0 ? laborTotal : 0,
+                parts: index === 0 ? partsTotal : 0
+            }));
+        } else if (data.bundleLabor && section.filter(work => work.labor !== 0).length === 1) {
+            const laborTotal = section.reduce((sum, work) => sum + work.labor, 0);
+            let merged = false;
+            section = section.map(work => {
+                if (work.labor === 0) return work;
+                const next = { ...work, labor: merged ? 0 : laborTotal };
+                merged = true;
+                return next;
+            });
+        }
+        output.push(...section);
+        section = [];
+    };
 
-    const base = printDocument.createElement("base");
-    base.href = document.baseURI;
-    printDocument.head.appendChild(base);
-    const stylesheet = printDocument.createElement("link");
-    stylesheet.rel = "stylesheet";
-    stylesheet.href = new URL("style.css", document.baseURI).href;
+    data.works.forEach(work => {
+        const description = String(work.desc || "").trim();
+        const row = {
+            desc: description,
+            labor: Number(work.labor) || 0,
+            parts: Number(work.parts) || 0
+        };
+        if (description.startsWith("*")) {
+            flushSection();
+            output.push(row);
+        } else {
+            section.push(row);
+        }
+    });
+    flushSection();
+    return output;
+}
 
-    const container = printDocument.createElement("div");
-    container.className = "container";
-    container.appendChild(estimate);
-    printDocument.body.appendChild(container);
+function buildEstimateImage() {
+    ensureEstimateDate();
+    const data = collectEstimateData();
+    const banner = getEstimateImage(".print-banner");
+    const preparedSignature = getEstimateImage(".sig-block:first-child .sig-image");
+    const approvedSignature = getEstimateImage(".sig-block:last-child .sig-image");
+    const pixelRatio = 2;
+    const pageWidth = 850;
+    const margin = 30;
+    const contentWidth = pageWidth - margin * 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = pageWidth * pixelRatio;
+    canvas.height = 2200 * pixelRatio;
+    let context = canvas.getContext("2d");
+    if (!context) throw new Error("Image export is not supported by this browser.");
+    context.scale(pixelRatio, pixelRatio);
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, pageWidth, 2200);
+    context.fillStyle = "#111";
+    context.strokeStyle = "#111";
+    context.textBaseline = "top";
+    let y = margin;
 
-    const openPrintDialog = () => {
-        const images = Array.from(printDocument.images);
-        Promise.all(images.map(image => image.complete
-            ? Promise.resolve()
-            : new Promise(resolve => {
-                image.addEventListener("load", resolve, { once: true });
-                image.addEventListener("error", resolve, { once: true });
-                window.setTimeout(resolve, 3000);
-            }))).then(() => {
-            if (!printWindow.closed) {
-                printWindow.focus();
-                printWindow.print();
-            }
+    const drawCenteredImage = (image, maxWidth, maxHeight) => {
+        const scale = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1);
+        const width = image.naturalWidth * scale;
+        const height = image.naturalHeight * scale;
+        context.drawImage(image, (pageWidth - width) / 2, y, width, height);
+        y += height;
+    };
+    const drawCenteredText = (text, font, lineHeight) => {
+        context.font = font;
+        context.textAlign = "center";
+        const lines = wrapCanvasText(context, text, contentWidth);
+        lines.forEach(line => {
+            context.fillText(line, pageWidth / 2, y);
+            y += lineHeight;
         });
     };
-    stylesheet.addEventListener("load", openPrintDialog, { once: true });
-    stylesheet.addEventListener("error", () => {
-        document.getElementById("estimateMessage").textContent =
-            "Could not load the print layout. Reopen the app while connected to the server and try again.";
-    }, { once: true });
-    printDocument.head.appendChild(stylesheet);
+    const drawCellText = (text, x, top, width, font, lineHeight, padding = 6) => {
+        context.font = font;
+        context.textAlign = "left";
+        const lines = wrapCanvasText(context, text, width - padding * 2);
+        lines.forEach((line, index) => {
+            context.fillText(line, x + padding, top + padding + index * lineHeight);
+        });
+        return Math.max(28, lines.length * lineHeight + padding * 2);
+    };
+    const drawRule = (x1, y1, x2, y2, color = "#222") => {
+        context.strokeStyle = color;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(x1, y1);
+        context.lineTo(x2, y2);
+        context.stroke();
+    };
+
+    drawCenteredImage(banner, contentWidth, 95);
+    y += 3;
+    drawRule(margin, y, pageWidth - margin, y, "#e1b400");
+    y += 8;
+    drawCenteredText("RLD AUTOWORX AND TOWING SERVICES", "bold 13px Arial", 17);
+    [
+        "Brgy. Buli, Taal, Batangas",
+        "Contact No: 09296462336/09267433265/(043)321-8477",
+        "Email: rldcarpaintingservices@yahoo.com",
+        "TIN NO: 287-920-998-000"
+    ].forEach(line => drawCenteredText(line, "bold 9px Arial", 12));
+    y += 8;
+
+    context.font = "bold 14px Arial";
+    context.textAlign = "left";
+    context.fillText("JOB ESTIMATE", margin, y);
+    context.textAlign = "right";
+    context.font = "bold 11px Arial";
+    context.fillText(`DATE: ${formatEstimateDate(data.date)}`, pageWidth - margin, y + 1);
+    y += 23;
+
+    const columnWidths = [contentWidth * 0.45, contentWidth * 0.27, contentWidth * 0.28];
+    const tableX = margin;
+    const infoHeaderHeight = 24;
+    context.fillStyle = "#f0f0f0";
+    context.fillRect(tableX, y, contentWidth, infoHeaderHeight);
+    context.fillStyle = "#111";
+    drawCellText("CLIENT", tableX, y, columnWidths[0], "bold 9px Arial", 12);
+    drawCellText("VEHICLE", tableX + columnWidths[0], y, columnWidths[1] + columnWidths[2], "bold 9px Arial", 12);
+    drawRule(tableX, y, tableX + contentWidth, y);
+    drawRule(tableX, y + infoHeaderHeight, tableX + contentWidth, y + infoHeaderHeight);
+    drawRule(tableX, y, tableX, y + infoHeaderHeight);
+    drawRule(tableX + columnWidths[0], y, tableX + columnWidths[0], y + infoHeaderHeight);
+    drawRule(tableX + contentWidth, y, tableX + contentWidth, y + infoHeaderHeight);
+    y += infoHeaderHeight;
+
+    const infoRows = [
+        [`NAME: ${data.clientName}`, `MAKE & MODEL: ${data.makeModel}`, `PLATE NO.: ${data.plateNo}`],
+        [`ADDRESS: ${data.address}`, `CHASSIS NO: ${data.chassisNo}`, `ENGINE NO.: ${data.engineNo}`],
+        [`CONTACT NUMBER: ${data.contact}`, `COLOR: ${data.color}`, `INSURANCE.: ${data.insurance}`]
+    ];
+    infoRows.forEach(row => {
+        const rowHeight = Math.max(...row.map((text, index) => {
+            context.font = "8px Arial";
+            return wrapCanvasText(context, text, columnWidths[index] - 12).length * 10 + 12;
+        }));
+        let x = tableX;
+        row.forEach((text, index) => {
+            drawRule(x, y, x, y + rowHeight);
+            drawCellText(text, x, y, columnWidths[index], "8px Arial", 10);
+            x += columnWidths[index];
+        });
+        drawRule(tableX + contentWidth, y, tableX + contentWidth, y + rowHeight);
+        drawRule(tableX, y + rowHeight, tableX + contentWidth, y + rowHeight);
+        y += rowHeight;
+    });
+    y += 10;
+
+    const workWidths = [contentWidth * 0.5, contentWidth * 0.25, contentWidth * 0.25];
+    const workHeaders = ["SCOPE OF WORKS", "COST OF LABOR", "COST OF PARTS"];
+    const drawWorkRow = (values, bold = false, textColor = "#111") => {
+        const font = bold ? "bold 8px Arial" : "8px Arial";
+        const rowHeight = Math.max(...values.map((value, index) =>
+            wrapCanvasText(context, value, workWidths[index] - 12).length * 11 + 10
+        ));
+        let x = tableX;
+        values.forEach((value, index) => {
+            drawRule(x, y, x, y + rowHeight);
+            context.font = font;
+            context.fillStyle = textColor;
+            context.textAlign = index ? "right" : "left";
+            const lines = wrapCanvasText(context, value, workWidths[index] - 12);
+            lines.forEach((line, lineIndex) => {
+                context.fillText(line, index ? x + workWidths[index] - 6 : x + 6, y + 5 + lineIndex * 11);
+            });
+            x += workWidths[index];
+        });
+        context.fillStyle = "#111";
+        drawRule(tableX + contentWidth, y, tableX + contentWidth, y + rowHeight);
+        drawRule(tableX, y + rowHeight, tableX + contentWidth, y + rowHeight);
+        y += rowHeight;
+    };
+    context.fillStyle = "#f0f0f0";
+    context.fillRect(tableX, y, contentWidth, 24);
+    context.fillStyle = "#111";
+    drawRule(tableX, y, tableX + contentWidth, y);
+    drawWorkRow(workHeaders, true);
+    let workNumber = 1;
+    getPrintableWorkRows(data).forEach(work => {
+        let description = String(work.desc || "").trim();
+        if (!description) return;
+        if (description.startsWith("*")) {
+            workNumber = 1;
+        } else {
+            description = `${workNumber}. ${description}`;
+            workNumber += 1;
+        }
+        drawWorkRow([
+            description,
+            work.labor ? formatPHP(work.labor) : "",
+            work.parts ? formatPHP(work.parts) : ""
+        ]);
+    });
+    if (data.noteHiddenDamage) {
+        drawWorkRow(["NOTE: HIDDEN DAMAGE ARE NOT INCLUDED", "", ""], true, "#c00000");
+    }
+    drawWorkRow([
+        "TOTAL LABOR/MATERIALS/PARTS:",
+        document.getElementById("totLabor").value,
+        document.getElementById("totParts").value
+    ], true);
+    drawWorkRow(["DOWNPAYMENT:", document.getElementById("downpayment").value, ""], true);
+    drawWorkRow(["TOTAL AMOUNT DUE:", document.getElementById("totDue").value, ""], true);
+    y += 14;
+
+    const signatureTop = y;
+    const signatureWidth = contentWidth / 2 - 20;
+    [preparedSignature, approvedSignature].forEach((image, index) => {
+        const x = margin + index * (contentWidth / 2) + 10;
+        const imageScale = Math.min(110 / image.naturalWidth, 42 / image.naturalHeight);
+        const imageWidth = image.naturalWidth * imageScale;
+        const imageHeight = image.naturalHeight * imageScale;
+        context.drawImage(image, x + (signatureWidth - imageWidth) / 2, signatureTop, imageWidth, imageHeight);
+        drawRule(x + 10, signatureTop + 46, x + signatureWidth, signatureTop + 46);
+        context.font = "bold 8px Arial";
+        context.textAlign = "center";
+        context.fillText(
+            index ? "APPROVED BY: ROLDAN DUEÑAS" : "PREPARED BY: BEVERLY BALATBAT",
+            x + signatureWidth / 2,
+            signatureTop + 50
+        );
+    });
+    y += 72;
+
+    const terms = [
+        "I HEREBY AUTHORIZE AND AGREE TO PAY FOR THE ABOVE REPAIRS AND WORK TO BE DONE ON MY VEHICLE INCLUDING ALL PARTS AND MATERIALS NECESSARY TO PERFORM THE SAME. I ALSO AGREE TO THE TERMS AND CONDITION STATED BELOW:",
+        "1. RLD AUTOWORX & TOWING SERVICES will not be held responsible for any losses or damages to the vehicle and its accessories or any articles of value left in the vehicle in case of theft, fire, accident or any other cause beyond the auto center's control.",
+        "2. Customer acknowledges an expenses mechanic lien to secure the amount of repairs thereto.",
+        "3. Company employees may operate vehicle for purposes of testing inspection and /or deliver at customer's risk.",
+        "4. No claims for damages to vehicle under this repair order will be considered unless received by the company within three (3) days after the vehicle has been delivered.",
+        "5. Customers agrees to pay interest at the rate of 3% per month on all accounts not paid when due.",
+        "6. RLD AUTOWORX & TOWING SERVICES will charge a daily storage fee of P300.00 on the vehicle from the day enter on the repair shop if not yet started of repair of vehicle.",
+        "7. RLD AUTOWORX & TOWING SERVICES to charge a daily storage fee of P300.00 on the vehicle not claimed on the date of upon completion of repair.",
+        "8. Hidden defects are not included in this evaluation.",
+        "9. Prices are subject to change without prior notice."
+    ];
+    terms.forEach(term => {
+        context.font = "7px Arial";
+        context.textAlign = "left";
+        const lines = wrapCanvasText(context, term, contentWidth);
+        lines.forEach(line => {
+            context.fillText(line, margin, y);
+            y += 9;
+        });
+        y += 2;
+    });
+
+    const logicalHeight = Math.max(1300, y + margin);
+    if (logicalHeight > 2200) {
+        throw new Error("This estimate is too long to fit in one image. Remove some work items and try again.");
+    }
+    const finalCanvas = document.createElement("canvas");
+    finalCanvas.width = pageWidth * pixelRatio;
+    finalCanvas.height = logicalHeight * pixelRatio;
+    const finalContext = finalCanvas.getContext("2d");
+    if (!finalContext) throw new Error("Image export is not supported by this browser.");
+    finalContext.fillStyle = "#fff";
+    finalContext.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
+    finalContext.drawImage(
+        canvas, 0, 0, canvas.width, finalCanvas.height, 0, 0, finalCanvas.width, finalCanvas.height
+    );
+    const dataUrl = finalCanvas.toDataURL("image/png");
+    const imageBytes = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    const bytes = new Uint8Array(imageBytes.length);
+    for (let index = 0; index < imageBytes.length; index += 1) {
+        bytes[index] = imageBytes.charCodeAt(index);
+    }
+    return { blob: new Blob([bytes], { type: "image/png" }), data };
+}
+
+async function saveEstimateImage() {
+    const button = document.getElementById("saveImageBtn");
+    const message = document.getElementById("estimateMessage");
+    let generatedImage;
+    button.disabled = true;
+    message.textContent = "Creating estimate image...";
+    try {
+        const { blob, data } = buildEstimateImage();
+        const fileName = `${estimateFilenameComponent(data.makeModel, "UNKNOWN VEHICLE")}_${estimateFilenameComponent(data.plateNo, "NO PLATE")}.png`;
+        const file = new File([blob], fileName, { type: "image/png" });
+        generatedImage = { blob, fileName };
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: "RLD Job Estimate" });
+            message.textContent = "Choose Photos or Gallery in the share menu to save the image.";
+            return;
+        }
+        downloadEstimateImage(blob, fileName, message);
+    } catch (error) {
+        if (error.name === "AbortError") {
+            message.textContent = "Image sharing was cancelled.";
+        } else if (error.name === "NotAllowedError") {
+            downloadEstimateImage(generatedImage && generatedImage.blob, generatedImage && generatedImage.fileName, message);
+        } else {
+            message.textContent = `Could not create or share the estimate image: ${error.message}`;
+        }
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function downloadEstimateImage(blob, fileName, message) {
+    if (!blob || !fileName) {
+        message.textContent = "Could not share the image. Try Save as image again.";
+        return;
+    }
+    const downloadUrl = URL.createObjectURL(blob);
+    const download = document.createElement("a");
+    download.href = downloadUrl;
+    download.download = fileName;
+    download.click();
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    message.textContent = "Image downloaded. Open it from Downloads or Files to save it to Photos or Gallery.";
 }
 
 // --- SAVE ESTIMATES AND QUEUE DRIVE SYNC ---
 function collectEstimateData() {
     const data = {
         date: document.getElementById('date').value,
+        noteHiddenDamage: document.getElementById("noteHiddenDamage").checked,
         orgPrefix: document.getElementById('orgPrefix').value,
         clientName: document.getElementById('clientName').value,
         address: document.getElementById('address').value,
@@ -1193,6 +1767,8 @@ function collectEstimateData() {
 
 function clearEstimateForm() {
     document.getElementById("estimateForm").reset();
+    updateHiddenDamageNote();
+    ensureEstimateDate();
     const worksBody = document.getElementById("worksBody");
     worksBody.replaceChildren();
     addRow();
@@ -1216,8 +1792,7 @@ document.getElementById("clearEntryBtn").addEventListener("click", () => {
 
 document.getElementById("saveBtn").addEventListener("click", function() {
     try {
-        const dateInput = document.getElementById("date");
-        if (!dateInput.value) dateInput.value = getLocalDateString();
+        ensureEstimateDate();
         const estimates = readEstimates();
         const existing = editingEstimateId ? estimates.find(item => item.id === editingEstimateId) : null;
         const savedAt = new Date().toISOString();

@@ -113,6 +113,78 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(reset.status_code, 200)
         self.assertEqual(user_client.get("/api/session", base_url=self.base_url).status_code, 401)
 
+    def test_authenticated_users_manage_shared_unit_price_list(self):
+        self.assertEqual(
+            self.client.get("/api/units", base_url=self.base_url).status_code,
+            401,
+        )
+        self.assertEqual(self.login().status_code, 200)
+        unit_data = {
+            "maker": "Toyota",
+            "unit": "Hilux 2.4 E",
+            "transmission": "Automatic",
+            "plateNo": "ABC-123",
+            "yearModel": 2024,
+            "fuelType": "Diesel",
+            "sellingPrice": 1450000,
+            "available": True,
+        }
+        created = self.client.post(
+            "/api/units", base_url=self.base_url, json=unit_data
+        )
+        self.assertEqual(created.status_code, 201)
+        saved = created.json["unit"]
+        self.assertEqual(saved["maker"], "Toyota")
+        self.assertEqual(saved["sellingPrice"], 1450000)
+        self.assertTrue(saved["available"])
+        self.assertEqual(
+            self.client.get("/api/units", base_url=self.base_url).json["units"],
+            [saved],
+        )
+
+        updated = self.client.put(
+            f"/api/units/{saved['id']}",
+            base_url=self.base_url,
+            json={**unit_data, "unit": "Hilux 2.4 G", "available": False},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json["unit"]["unit"], "Hilux 2.4 G")
+        self.assertFalse(updated.json["unit"]["available"])
+        invalid = self.client.put(
+            f"/api/units/{saved['id']}",
+            base_url=self.base_url,
+            json={**unit_data, "available": "false"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(
+            self.client.post(
+                "/api/units",
+                base_url=self.base_url,
+                json={**unit_data, "maker": "Unknown"},
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/units",
+                base_url=self.base_url,
+                json={**unit_data, "yearModel": 2024.5},
+            ).status_code,
+            400,
+        )
+
+        deleted = self.client.delete(
+            f"/api/units/{saved['id']}", base_url=self.base_url
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(self.client.get("/api/units", base_url=self.base_url).json["units"], [])
+        self.assertEqual(
+            self.client.delete(
+                f"/api/units/{saved['id']}", base_url=self.base_url
+            ).status_code,
+            404,
+        )
+
     def test_estimate_sync_uses_latest_client_timestamp_and_tombstones(self):
         self.assertEqual(self.login().status_code, 200)
         estimate_id = "estimate-1"
@@ -153,6 +225,8 @@ class LocalServerTests(unittest.TestCase):
                 "id": "excel-1",
                 "updatedAt": "2026-02-01T00:00:00.000Z",
                 "data": {
+                    "date": "2026-02-01",
+                    "noteHiddenDamage": True,
                     "orgPrefix": "MGO Taal",
                     "makeModel": "Toyota Hilux",
                     "plateNo": "ABC-123",
@@ -186,6 +260,10 @@ class LocalServerTests(unittest.TestCase):
         sheet = workbook["Job Estimate"]
         values = [cell.value for row in sheet.iter_rows() for cell in row if cell.value]
         self.assertIn("1. NUT", values)
+        self.assertEqual(sheet["A9"].value, "DATE: FEBRUARY 1, 2026")
+        self.assertEqual(sheet["A23"].value, "NOTE: HIDDEN DAMAGE ARE NOT INCLUDED")
+        self.assertTrue(sheet["A23"].font.bold)
+        self.assertEqual(sheet["A23"].font.color.rgb, "00C00000")
         self.assertIn("2. BOLT", values)
         self.assertIn("1. SIDE PANEL", values)
         self.assertIn("*PARTS", values)

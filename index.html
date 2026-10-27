@@ -3,18 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RLD Autoworx | Job Estimate System</title>
+    <title>RLD AutoDesk</title>
     <meta name="theme-color" content="#0b0f19">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.webmanifest">
-    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="icon" href="rld_logo.png" type="image/png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
     <main class="auth-shell" id="authShell">
         <section class="auth-card" aria-labelledby="authTitle">
+            <img src="rld_logo.png" alt="RLD Autoworx logo" class="auth-logo">
             <h1 id="authTitle">RLD AUTOWORX</h1>
             <p class="auth-subtitle">Local quotation system · works offline after setup</p>
 
@@ -51,9 +52,17 @@
             <span>Signed in as <strong id="activeUsername"></strong></span>
             <span id="connectionStatus" class="connection-status" role="status" aria-live="polite"></span>
             <button type="button" id="installAppBtn" class="logout-button">Install app</button>
+            <label class="theme-toggle" for="themeToggle">
+                <span>Light mode</span>
+                <input type="checkbox" id="themeToggle" role="switch" aria-label="Light mode">
+                <span class="theme-switch-track" aria-hidden="true"></span>
+            </label>
             <nav class="app-navigation" aria-label="Main navigation">
                 <button type="button" id="showEstimatePage" class="nav-button" aria-current="page">
                     <span class="nav-icon" aria-hidden="true">▤</span><span>Estimate</span>
+                </button>
+                <button type="button" id="showUnitsPage" class="nav-button">
+                    <span class="nav-icon" aria-hidden="true">🚘</span><span>Unit prices</span>
                 </button>
                 <button type="button" id="showHistoryPage" class="nav-button">
                     <span class="nav-icon" aria-hidden="true">◷</span><span>History</span>
@@ -74,10 +83,10 @@
         <div class="header">
             <h2 class="print-hide">RLD AUTOWORX AND TOWING SERVICES</h2>
             <h3 class="print-show">RLD AUTOWORX AND TOWING SERVICES</h3>
-            <p>Brgy. Buli, Taal, Batangas</p>
-            <p>Contact No: 09296462336/09267433265/(043)321-8477</p>
-            <p>Email: rldcarpaintingservices@yahoo.com</p>
-            <p class="tin-no">TIN NO: 287-920-998-000</p>
+            <p class="screen-hide">Brgy. Buli, Taal, Batangas</p>
+            <p class="screen-hide">Contact No: 09296462336/09267433265/(043)321-8477</p>
+            <p class="screen-hide">Email: rldcarpaintingservices@yahoo.com</p>
+            <p class="tin-no screen-hide">TIN NO: 287-920-998-000</p>
         </div>
 
         <form id="estimateForm">
@@ -96,7 +105,9 @@
                 <div class="doc-title">JOB ESTIMATE</div>
                 <div class="doc-date">
                     <label>DATE:</label>
-                    <input type="date" id="date" class="inline-input" aria-label="Estimate date">
+                    <span id="dateDisplay" class="formatted-date" aria-live="polite"></span>
+                    <button type="button" id="pickDateBtn" class="date-picker-button no-print" aria-label="Choose estimate date">▦</button>
+                    <input type="date" id="date" class="date-picker-input no-print" aria-label="Estimate date">
                 </div>
             </div>
 
@@ -125,6 +136,7 @@
             <div class="bundle-option no-print">
                 <label><input type="checkbox" id="bundleLabor" checked> Bundle a single labor charge across work items when printing (except * PARTS)</label>
                 <label><input type="checkbox" id="bundleAllPrices"> Bundle all labor and parts prices by section when printing</label>
+                <label><input type="checkbox" id="noteHiddenDamage"> Add a red note: hidden damage is not included</label>
             </div>
 
             <table id="worksTable">
@@ -146,6 +158,13 @@
                         <!-- Changed to type="text" to accept PHP formatting -->
                         <td><input type="text" class="cost-input labor-cost"></td>
                         <td><input type="text" class="cost-input parts-cost"></td>
+                    </tr>
+                </tbody>
+                <tbody id="estimateNoteBody" hidden>
+                    <tr class="hidden-damage-note">
+                        <td>NOTE: HIDDEN DAMAGE ARE NOT INCLUDED</td>
+                        <td></td>
+                        <td></td>
                     </tr>
                 </tbody>
                 <tbody class="totals-section">
@@ -195,11 +214,78 @@
 
             <div class="buttons no-print">
                 <button type="button" class="btn btn-success" id="printBtn">PRINT DOCUMENT</button>
+                <button type="button" class="btn" id="saveImageBtn">SAVE AS IMAGE</button>
                 <button type="button" class="btn" id="saveBtn">SAVE</button>
                 <button type="button" class="btn" id="clearEntryBtn">CLEAR ENTRY</button>
             </div>
             <p id="estimateMessage" class="auth-message no-print" role="status" aria-live="polite"></p>
         </form>
+        <footer class="page-credit no-print">Developed and designed by: Joshua Kagayutan.</footer>
+        </section>
+
+        <section id="unitsPage" class="admin-panel no-print" hidden>
+            <div class="units-heading">
+                <div>
+                    <h1>Unit price list</h1>
+                    <p class="auth-help">Browse vehicles by maker. Swipe a unit from left to right to change its availability.</p>
+                </div>
+                <button type="button" id="addUnitBtn" class="btn btn-success units-add-button" aria-label="Add unit">+ Add unit</button>
+            </div>
+            <form id="unitSearchForm" class="units-search">
+                <label class="history-search-label" for="unitSearch">Search units</label>
+                <div class="units-search-row">
+                    <input type="search" id="unitSearch" placeholder="Search maker, unit, plate, year, fuel, or transmission">
+                    <button type="submit" class="request-button">Search</button>
+                </div>
+            </form>
+            <p id="unitsMessage" class="auth-message" role="status" aria-live="polite"></p>
+            <div id="unitList" aria-live="polite"></div>
+            <form id="unitForm" class="unit-editor" hidden>
+                <h2 id="unitFormTitle">Add unit</h2>
+                <div class="unit-form-grid">
+                    <label>Maker
+                        <select id="unitMaker" required>
+                            <option value="Toyota">Toyota</option>
+                            <option value="Honda">Honda</option>
+                            <option value="Isuzu">Isuzu</option>
+                            <option value="Mitsubishi">Mitsubishi</option>
+                            <option value="Hyundai">Hyundai</option>
+                            <option value="Ford">Ford</option>
+                            <option value="Volkswagen">Volkswagen</option>
+                            <option value="Nissan">Nissan</option>
+                        </select>
+                    </label>
+                    <label>Unit
+                        <input type="text" id="unitName" maxlength="100" required>
+                    </label>
+                    <label>Transmission
+                        <input type="text" id="unitTransmission" maxlength="40" placeholder="e.g. Automatic" required>
+                    </label>
+                    <label>Plate no.
+                        <input type="text" id="unitPlateNo" maxlength="20">
+                    </label>
+                    <label>Year model
+                        <input type="number" id="unitYearModel" min="1900" max="2100" step="1" required>
+                    </label>
+                    <label>Fuel type
+                        <input type="text" id="unitFuelType" maxlength="40" placeholder="e.g. Diesel" required>
+                    </label>
+                    <label>Selling price (PHP)
+                        <input type="number" id="unitSellingPrice" min="0" max="9999999999.99" step="0.01" required>
+                    </label>
+                    <label>Availability
+                        <select id="unitAvailability" required>
+                            <option value="true">Available</option>
+                            <option value="false">Unavailable</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="unit-editor-actions">
+                    <button type="submit" class="btn btn-success">Save unit</button>
+                    <button type="button" id="cancelUnitEdit" class="request-button">Cancel</button>
+                    <button type="button" id="deleteUnitBtn" class="request-button reject-button" hidden aria-label="Delete unit">🗑 Delete</button>
+                </div>
+            </form>
         </section>
 
         <section id="historyPage" class="admin-panel no-print" hidden>

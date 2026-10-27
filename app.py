@@ -1,5 +1,6 @@
 import json
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -29,7 +30,7 @@ SERVER_PORT = 8443
 USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]{3,30}$")
 PUBLIC_FILES = {
     "index.html", "style.css", "script.js", "manifest.webmanifest",
-    "service-worker.js", "icon.svg", "header.png", "signature1.png", "signature2.png",
+    "service-worker.js", "rld_logo.png", "header.png", "signature1.png", "signature2.png",
 }
 
 
@@ -51,6 +52,17 @@ def resolve_data_dir(config_path=STORAGE_CONFIG_PATH):
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+def format_estimate_date(value):
+    try:
+        parsed_date = datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return str(value or "")
+    month_names = (
+        "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+        "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+    )
+    return f"{month_names[parsed_date.month - 1]} {parsed_date.day}, {parsed_date.year}"
 
 
 def connect_db(database_path):
@@ -104,6 +116,21 @@ def init_db(database_path):
                 username TEXT NOT NULL,
                 data_json TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS units (
+                id TEXT PRIMARY KEY,
+                maker TEXT NOT NULL,
+                unit TEXT NOT NULL,
+                transmission TEXT NOT NULL,
+                plate_no TEXT NOT NULL,
+                year_model INTEGER NOT NULL,
+                fuel_type TEXT NOT NULL,
+                selling_price REAL NOT NULL CHECK (selling_price >= 0),
+                available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1))
             )
             """
         )
@@ -181,6 +208,77 @@ def create_app(database_path=None, secret_key=None):
             "deleted": bool(row["deleted"]),
         }
 
+    def unit_record(row):
+        return {
+            "id": row["id"],
+            "maker": row["maker"],
+            "unit": row["unit"],
+            "transmission": row["transmission"],
+            "plateNo": row["plate_no"],
+            "yearModel": row["year_model"],
+            "fuelType": row["fuel_type"],
+            "sellingPrice": row["selling_price"],
+            "available": bool(row["available"]),
+        }
+
+    def validated_unit(payload):
+        if not isinstance(payload, dict):
+            return None, "Enter valid unit details."
+        makers = ("Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan")
+        maker = payload.get("maker")
+        text_fields = {
+            "unit": ("unit", 100),
+            "transmission": ("transmission", 40),
+            "plateNo": ("plateNo", 20),
+            "fuelType": ("fuelType", 40),
+        }
+        optional_fields = {"plateNo"}
+        if maker not in makers:
+            return None, "Choose a maker from the list."
+        values = {}
+        for field, (key, limit) in text_fields.items():
+            value = payload.get(key, "" if field in optional_fields else None)
+            if (
+                not isinstance(value, str)
+                or (field not in optional_fields and not value.strip())
+                or len(value.strip()) > limit
+            ):
+                return None, f"Enter a valid {field.replace('No', ' number').replace('Type', ' type')}."
+            values[field] = value.strip()
+        year_model = payload.get("yearModel")
+        if isinstance(year_model, bool):
+            return None, "Enter a valid year model."
+        if isinstance(year_model, float) and not year_model.is_integer():
+            return None, "Enter a valid year model."
+        try:
+            year_model = int(year_model)
+        except (TypeError, ValueError, OverflowError):
+            return None, "Enter a valid year model."
+        if not 1900 <= year_model <= 2100:
+            return None, "Enter a valid year model."
+        selling_price = payload.get("sellingPrice")
+        if isinstance(selling_price, bool):
+            return None, "Enter a valid selling price."
+        try:
+            selling_price = float(selling_price)
+        except (TypeError, ValueError, OverflowError):
+            return None, "Enter a valid selling price."
+        if not 0 <= selling_price <= 9999999999.99 or not math.isfinite(selling_price):
+            return None, "Enter a valid selling price."
+        available = payload.get("available", True)
+        if not isinstance(available, bool):
+            return None, "Choose a valid availability status."
+        return {
+            "maker": maker,
+            "unit": values["unit"],
+            "transmission": values["transmission"],
+            "plateNo": values["plateNo"],
+            "yearModel": year_model,
+            "fuelType": values["fuelType"],
+            "sellingPrice": round(selling_price, 2),
+            "available": available,
+        }, None
+
     @app.get("/")
     def home():
         return send_from_directory(ROOT, "index.html")
@@ -194,6 +292,73 @@ def create_app(database_path=None, secret_key=None):
     @app.get("/api/health")
     def health():
         return jsonify(status="ok", serverTime=utc_now())
+
+    @app.get("/api/units")
+    @login_required
+    def list_units():
+        with database_connection(app.config["DATABASE"]) as connection:
+            rows = connection.execute(
+                "SELECT * FROM units ORDER BY maker COLLATE NOCASE, unit COLLATE NOCASE, year_model DESC"
+            ).fetchall()
+        return jsonify(units=[unit_record(row) for row in rows])
+
+    @app.post("/api/units")
+    @login_required
+    def create_unit():
+        require_same_origin()
+        unit, error = validated_unit(request.get_json(silent=True))
+        if error:
+            return jsonify(error=error), 400
+        unit_id = secrets.token_urlsafe(12)
+        with database_connection(app.config["DATABASE"]) as connection:
+            connection.execute(
+                """
+                INSERT INTO units
+                    (id, maker, unit, transmission, plate_no, year_model, fuel_type, selling_price, available)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    unit_id, unit["maker"], unit["unit"], unit["transmission"], unit["plateNo"],
+                    unit["yearModel"], unit["fuelType"], unit["sellingPrice"], int(unit["available"]),
+                ),
+            )
+            saved = connection.execute("SELECT * FROM units WHERE id = ?", (unit_id,)).fetchone()
+        return jsonify(unit=unit_record(saved)), 201
+
+    @app.put("/api/units/<unit_id>")
+    @login_required
+    def update_unit(unit_id):
+        require_same_origin()
+        unit, error = validated_unit(request.get_json(silent=True))
+        if error:
+            return jsonify(error=error), 400
+        available = unit["available"]
+        with database_connection(app.config["DATABASE"]) as connection:
+            result = connection.execute(
+                """
+                UPDATE units SET maker = ?, unit = ?, transmission = ?, plate_no = ?,
+                    year_model = ?, fuel_type = ?, selling_price = ?, available = ?
+                WHERE id = ?
+                """,
+                (
+                    unit["maker"], unit["unit"], unit["transmission"], unit["plateNo"],
+                    unit["yearModel"], unit["fuelType"], unit["sellingPrice"], int(available), unit_id,
+                ),
+            )
+            if result.rowcount == 0:
+                return jsonify(error="That unit no longer exists."), 404
+            saved = connection.execute("SELECT * FROM units WHERE id = ?", (unit_id,)).fetchone()
+        return jsonify(unit=unit_record(saved))
+
+    @app.delete("/api/units/<unit_id>")
+    @login_required
+    def delete_unit(unit_id):
+        require_same_origin()
+        with database_connection(app.config["DATABASE"]) as connection:
+            result = connection.execute("DELETE FROM units WHERE id = ?", (unit_id,))
+        if result.rowcount == 0:
+            return jsonify(error="That unit no longer exists."), 404
+        return jsonify(id=unit_id, status="deleted")
 
     @app.post("/api/login")
     def login():
@@ -560,7 +725,7 @@ def save_estimate_workbook(record, data_dir):
     sheet["A8"] = "JOB ESTIMATE"
     sheet["A8"].font = Font(name="Arial", size=12, bold=True)
     sheet["A8"].alignment = centered
-    sheet["A9"] = f"DATE: {data.get('date', '')}"
+    sheet["A9"] = f"DATE: {format_estimate_date(data.get('date'))}"
     sheet.merge_cells("A9:D9")
     sheet["A9"].font = bold
     sheet["A9"].alignment = right
@@ -613,6 +778,16 @@ def save_estimate_workbook(record, data_dir):
             cell.alignment = left if column == 1 else right
             if column in (3, 4) and isinstance(value, (int, float)):
                 cell.number_format = '"PHP " #,##0.00'
+        for column in range(1, 5):
+            sheet.cell(row_index, column).border = grid
+        sheet.row_dimensions[row_index].height = 16
+        row_index += 1
+
+    if data.get("noteHiddenDamage") is True:
+        sheet.merge_cells(start_row=row_index, start_column=1, end_row=row_index, end_column=2)
+        note = sheet.cell(row_index, 1, "NOTE: HIDDEN DAMAGE ARE NOT INCLUDED")
+        note.font = Font(name="Arial", size=9, bold=True, color="C00000")
+        note.alignment = left
         for column in range(1, 5):
             sheet.cell(row_index, column).border = grid
         sheet.row_dimensions[row_index].height = 16
