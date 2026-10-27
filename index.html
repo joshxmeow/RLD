@@ -234,7 +234,7 @@
             <form id="unitSearchForm" class="units-search">
                 <label class="history-search-label" for="unitSearch">Search units</label>
                 <div class="units-search-row">
-                    <input type="search" id="unitSearch" placeholder="Search maker, unit, plate, year, fuel, or transmission">
+                    <input type="search" id="unitSearch" placeholder="Search maker, unit, color, plate, year, fuel, or transmission">
                     <button type="submit" class="request-button">Search</button>
                 </div>
             </form>
@@ -253,6 +253,7 @@
                             <option value="Ford">Ford</option>
                             <option value="Volkswagen">Volkswagen</option>
                             <option value="Nissan">Nissan</option>
+                            <option value="Suzuki">Suzuki</option>
                         </select>
                     </label>
                     <label>Unit
@@ -260,6 +261,10 @@
                     </label>
                     <label>Transmission
                         <input type="text" id="unitTransmission" maxlength="40" placeholder="e.g. Automatic" required>
+                        <small class="unit-field-help">AT = Automatic; MT = Manual.</small>
+                    </label>
+                    <label>Color
+                        <input type="text" id="unitColor" maxlength="40" placeholder="Optional">
                     </label>
                     <label>Plate no.
                         <input type="text" id="unitPlateNo" maxlength="20">
@@ -271,7 +276,7 @@
                         <input type="text" id="unitFuelType" maxlength="40" placeholder="e.g. Diesel" required>
                     </label>
                     <label>Selling price (PHP)
-                        <input type="number" id="unitSellingPrice" min="0" max="9999999999.99" step="0.01" required>
+                        <input type="number" id="unitSellingPrice" min="0" max="9999999999.99" step="0.01" placeholder="Leave blank if not listed">
                     </label>
                     <label>Availability
                         <select id="unitAvailability" required>

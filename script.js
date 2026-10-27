@@ -6,7 +6,7 @@ const REMEMBERED_CREDENTIAL_KEY = "rld.rememberedCredential";
 const ESTIMATES_KEY = "rld.estimates.v1";
 const THEME_KEY = "rld.theme";
 const ADMIN_USERNAME = "rld";
-const UNIT_MAKERS = ["Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan"];
+const UNIT_MAKERS = ["Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan", "Suzuki"];
 let editingEstimateId = null;
 let editingUnitId = null;
 let units = [];
@@ -643,6 +643,7 @@ function getStatusLabel(estimate) {
 }
 
 function formatUnitPrice(price) {
+    if (price == null) return "Price not listed";
     return `PHP ${Number(price).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -652,7 +653,7 @@ function renderUnits() {
     list.replaceChildren();
     const matchingUnits = units.filter(unit => {
         const searchText = [
-            unit.maker, unit.unit, unit.transmission, unit.plateNo,
+            unit.maker, unit.unit, unit.transmission, unit.color, unit.plateNo,
             unit.yearModel, unit.fuelType, unit.sellingPrice
         ].join(" ").toLocaleLowerCase();
         return searchText.includes(searchTerm);
@@ -692,6 +693,7 @@ function renderUnits() {
             details.className = "unit-details";
             [
                 ["Transmission", unit.transmission],
+                ...(unit.color ? [["Color", unit.color]] : []),
                 ["Plate no.", unit.plateNo],
                 ["Year model", unit.yearModel],
                 ["Fuel type", unit.fuelType]
@@ -744,6 +746,7 @@ function beginUnitEdit(unit = null) {
     document.getElementById("unitMaker").value = unit ? unit.maker : UNIT_MAKERS[0];
     document.getElementById("unitName").value = unit ? unit.unit : "";
     document.getElementById("unitTransmission").value = unit ? unit.transmission : "";
+    document.getElementById("unitColor").value = unit ? unit.color || "" : "";
     document.getElementById("unitPlateNo").value = unit ? unit.plateNo : "";
     document.getElementById("unitYearModel").value = unit ? unit.yearModel : "";
     document.getElementById("unitFuelType").value = unit ? unit.fuelType : "";
@@ -767,10 +770,13 @@ function unitFormData() {
         maker: document.getElementById("unitMaker").value,
         unit: document.getElementById("unitName").value.trim(),
         transmission: document.getElementById("unitTransmission").value.trim(),
+        color: document.getElementById("unitColor").value.trim(),
         plateNo: document.getElementById("unitPlateNo").value.trim(),
         yearModel: Number(document.getElementById("unitYearModel").value),
         fuelType: document.getElementById("unitFuelType").value.trim(),
-        sellingPrice: Number(document.getElementById("unitSellingPrice").value),
+        sellingPrice: document.getElementById("unitSellingPrice").value === ""
+            ? null
+            : Number(document.getElementById("unitSellingPrice").value),
         available: document.getElementById("unitAvailability").value === "true"
     };
 }

@@ -1,6 +1,6 @@
 # RLD AutoDesk Local Estimate Server
 
-The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited while connected; the home-page light/dark theme preference is saved on each device. The `rld_logo.png` image is used for the login branding and installed app icon.
+The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited while connected; it includes color details and expands AT/MT to Automatic/Manual. The home-page light/dark theme preference is saved on each device. The `rld_logo.png` image is used for the login branding and installed app icon.
 
 ## First-time setup on the Windows server PC
 
@@ -43,6 +43,7 @@ Updating the app files does not normally change the server certificate, so phone
 - A phone must first open the app and sign in successfully while connected to the server. The app shell, account verifier, and estimates are then stored on that device. Do not clear the browser/PWA's site data if unsynced estimates need to be preserved.
 - Estimates save to the device immediately. While online, changes sync automatically on reconnect, app resume, or while the app remains open. The history shows whether each item is synced, syncing, or still waiting.
 - The unit price list is shared through the server and requires a connection to view or change. Add or edit unit details in **Unit prices**, search across the list, and swipe a unit card from left to right (or tap its availability badge) to toggle availability.
+- The bundled Units Price List is imported once during the update. A vehicle without a listed selling price remains in the list with “Price not listed”; add its price when known.
 - On the estimate form, select **Add a red note** to include “NOTE: HIDDEN DAMAGE ARE NOT INCLUDED” below the scope of works and above the totals in print, image exports, and Excel estimates.
 - Saving an estimate clears the entry form. Use **Clear entry** to discard the current form, and search estimate history by organization, vehicle, plate, date, or user.
 - Choose the estimate date with the phone or computer's native calendar picker. The estimate displays and prints the date as `MONTH DAY, YEAR`; if left blank, the current local date is used. Previously saved organization/government names, vehicle make/models, job keywords, and insurers on that device are automatically suggested as you fill in those fields.

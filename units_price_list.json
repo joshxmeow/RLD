@@ -1,0 +1,292 @@
+[
+  {
+    "maker": "Toyota",
+    "unit": "HIACE GL GRANDIA",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DDM3733",
+    "yearModel": 2016,
+    "fuelType": "Diesel",
+    "sellingPrice": 1200000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "HIACE GL GRANDIA",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "DAI 2405",
+    "yearModel": 2018,
+    "fuelType": "Diesel",
+    "sellingPrice": 1250000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "HIACE COMMUTER",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "NEB 4307",
+    "yearModel": 2019,
+    "fuelType": "Diesel",
+    "sellingPrice": 1350000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "HIACE COMMUTER",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "NEF 5267",
+    "yearModel": 2020,
+    "fuelType": "Diesel",
+    "sellingPrice": 950000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "HIACE COMMUTER",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "ABL 8764",
+    "yearModel": 2015,
+    "fuelType": "Diesel",
+    "sellingPrice": 790000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "HILUX",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DAC 5170",
+    "yearModel": 2018,
+    "fuelType": "Diesel",
+    "sellingPrice": 990000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "FORTUNER 4X2",
+    "transmission": "Manual",
+    "color": "Black",
+    "plateNo": "NCO 6846",
+    "yearModel": 2017,
+    "fuelType": "Diesel",
+    "sellingPrice": 980000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "AVANZA",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "NSO 860",
+    "yearModel": 2009,
+    "fuelType": "Gas",
+    "sellingPrice": 290000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "VIOS",
+    "transmission": "Automatic",
+    "color": "Orange",
+    "plateNo": "AQA 6592",
+    "yearModel": 2015,
+    "fuelType": "Gas",
+    "sellingPrice": 395000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "WIGO",
+    "transmission": "Manual",
+    "color": "Silver",
+    "plateNo": "NAM 2059",
+    "yearModel": 2018,
+    "fuelType": "Gas",
+    "sellingPrice": 330000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "WIGO",
+    "transmission": "Automatic",
+    "color": "Gray",
+    "plateNo": "NCN 4139",
+    "yearModel": 2017,
+    "fuelType": "Gas",
+    "sellingPrice": 350000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "YARIS",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "ZRG 373",
+    "yearModel": 2008,
+    "fuelType": "Gas",
+    "sellingPrice": 320000
+  },
+  {
+    "maker": "Toyota",
+    "unit": "WIGO",
+    "transmission": "Automatic",
+    "color": "Orange",
+    "plateNo": "DBA2157",
+    "yearModel": 2020,
+    "fuelType": "Gas",
+    "sellingPrice": 420000
+  },
+  {
+    "maker": "Honda",
+    "unit": "CITY",
+    "transmission": "Manual",
+    "color": "Modern Steel",
+    "plateNo": "ABD 9854",
+    "yearModel": 2015,
+    "fuelType": "Gas",
+    "sellingPrice": 420000
+  },
+  {
+    "maker": "Honda",
+    "unit": "BR-V",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "NGG 1649",
+    "yearModel": 2020,
+    "fuelType": "Gas",
+    "sellingPrice": 750000
+  },
+  {
+    "maker": "Honda",
+    "unit": "CIVIC",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "WLE 452",
+    "yearModel": 2000,
+    "fuelType": "Gas",
+    "sellingPrice": 350000
+  },
+  {
+    "maker": "Honda",
+    "unit": "CIVIC",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "VEA340",
+    "yearModel": 2006,
+    "fuelType": "Gas",
+    "sellingPrice": 320000
+  },
+  {
+    "maker": "Isuzu",
+    "unit": "MUX",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DAB 3829",
+    "yearModel": 2017,
+    "fuelType": "Diesel",
+    "sellingPrice": 880000
+  },
+  {
+    "maker": "Isuzu",
+    "unit": "CROSSWIND HI-LANDER",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "XFY 854",
+    "yearModel": 2002,
+    "fuelType": "Diesel",
+    "sellingPrice": 350000
+  },
+  {
+    "maker": "Isuzu",
+    "unit": "DMAX 4X2",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "FTF 574",
+    "yearModel": 2013,
+    "fuelType": "Diesel",
+    "sellingPrice": null
+  },
+  {
+    "maker": "Mitsubishi",
+    "unit": "STRADA",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DCQ 5219",
+    "yearModel": 2016,
+    "fuelType": "Diesel",
+    "sellingPrice": 650000
+  },
+  {
+    "maker": "Mitsubishi",
+    "unit": "MIRAGE",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DAO 7903",
+    "yearModel": 2019,
+    "fuelType": "Gas",
+    "sellingPrice": 370000
+  },
+  {
+    "maker": "Hyundai",
+    "unit": "ACCENT",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "DAI 1075",
+    "yearModel": 2018,
+    "fuelType": "Gas",
+    "sellingPrice": 380000
+  },
+  {
+    "maker": "Ford",
+    "unit": "RANGER 4X2",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "ZTJ 841",
+    "yearModel": 2009,
+    "fuelType": "Diesel",
+    "sellingPrice": 350000
+  },
+  {
+    "maker": "Ford",
+    "unit": "FIESTA",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "AAQ 6834",
+    "yearModel": 2014,
+    "fuelType": "Gas",
+    "sellingPrice": 350000
+  },
+  {
+    "maker": "Ford",
+    "unit": "RANGER",
+    "transmission": "Manual",
+    "color": "Orange",
+    "plateNo": "RNU209",
+    "yearModel": 2014,
+    "fuelType": "Diesel",
+    "sellingPrice": 590000
+  },
+  {
+    "maker": "Volkswagen",
+    "unit": "BEETLE",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "BDX 606",
+    "yearModel": 2000,
+    "fuelType": "Gas",
+    "sellingPrice": 320000
+  },
+  {
+    "maker": "Nissan",
+    "unit": "NAVARA",
+    "transmission": "Manual",
+    "color": "",
+    "plateNo": "NCF 7537",
+    "yearModel": 2016,
+    "fuelType": "Diesel",
+    "sellingPrice": 680000
+  },
+  {
+    "maker": "Suzuki",
+    "unit": "ERTIGA",
+    "transmission": "Automatic",
+    "color": "",
+    "plateNo": "AAO9119",
+    "yearModel": 2014,
+    "fuelType": "Gas",
+    "sellingPrice": 450000
+  }
+]

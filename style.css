@@ -180,6 +180,7 @@ th { background: rgba(255,255,255,0.05); color: var(--accent); font-size: 13px; 
 .unit-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .unit-form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; }
 .unit-form-grid input, .unit-form-grid select { min-width: 0; text-transform: none; font-weight: normal !important; }
+.unit-field-help { opacity: 0.7; font-size: 11px; font-weight: normal; }
 .unit-editor-actions { display: flex; gap: 10px; margin-top: 16px; }
 .unit-editor-actions .btn { flex: initial; padding: 10px 15px; }
 .unit-editor-actions .request-button { padding: 8px 12px; }

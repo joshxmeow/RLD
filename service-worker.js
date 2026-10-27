@@ -1,4 +1,4 @@
-const CACHE_NAME = "rld-estimates-shell-v14";
+const CACHE_NAME = "rld-estimates-shell-v15";
 const APP_BASE = new URL("./", self.registration.scope);
 const APP_SHELL = [
     "",

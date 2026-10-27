@@ -126,14 +126,98 @@ def init_db(database_path):
                 maker TEXT NOT NULL,
                 unit TEXT NOT NULL,
                 transmission TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '',
                 plate_no TEXT NOT NULL,
                 year_model INTEGER NOT NULL,
                 fuel_type TEXT NOT NULL,
-                selling_price REAL NOT NULL CHECK (selling_price >= 0),
+                selling_price REAL CHECK (selling_price IS NULL OR selling_price >= 0),
                 available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1))
             )
             """
         )
+        unit_columns = {
+            row["name"]: row
+            for row in connection.execute("PRAGMA table_info(units)").fetchall()
+        }
+        if "color" not in unit_columns or unit_columns["selling_price"]["notnull"]:
+            connection.execute("ALTER TABLE units RENAME TO units_legacy")
+            connection.execute(
+                """
+                CREATE TABLE units (
+                    id TEXT PRIMARY KEY,
+                    maker TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    transmission TEXT NOT NULL,
+                    color TEXT NOT NULL DEFAULT '',
+                    plate_no TEXT NOT NULL,
+                    year_model INTEGER NOT NULL,
+                    fuel_type TEXT NOT NULL,
+                    selling_price REAL CHECK (selling_price IS NULL OR selling_price >= 0),
+                    available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1))
+                )
+                """
+            )
+            color_column = "color" if "color" in unit_columns else "''"
+            connection.execute(
+                f"""
+                INSERT INTO units
+                    (id, maker, unit, transmission, color, plate_no, year_model,
+                     fuel_type, selling_price, available)
+                SELECT id, maker, unit, transmission, {color_column}, plate_no,
+                    year_model, fuel_type, selling_price, available
+                FROM units_legacy
+                """
+            )
+            connection.execute("DROP TABLE units_legacy")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS unit_price_list_imports (
+                version TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL
+            )
+            """
+        )
+        price_list_version = "2026-10"
+        imported = connection.execute(
+            "SELECT 1 FROM unit_price_list_imports WHERE version = ?",
+            (price_list_version,),
+        ).fetchone()
+        if imported is None:
+            price_list_path = ROOT / "units_price_list.json"
+            try:
+                price_list = json.loads(price_list_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Could not load the bundled unit price list at {price_list_path}: {error}") from error
+            for unit in price_list:
+                existing = connection.execute(
+                    "SELECT 1 FROM units WHERE plate_no = ? COLLATE NOCASE",
+                    (unit["plateNo"],),
+                ).fetchone()
+                if existing:
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO units
+                        (id, maker, unit, transmission, color, plate_no, year_model,
+                         fuel_type, selling_price, available)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        secrets.token_urlsafe(12),
+                        unit["maker"],
+                        unit["unit"],
+                        unit["transmission"],
+                        unit["color"],
+                        unit["plateNo"],
+                        unit["yearModel"],
+                        unit["fuelType"],
+                        unit["sellingPrice"],
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO unit_price_list_imports (version, imported_at) VALUES (?, ?)",
+                (price_list_version, utc_now()),
+            )
         admin = connection.execute(
             "SELECT username FROM users WHERE username = ?", (ADMIN_USERNAME,)
         ).fetchone()
@@ -214,6 +298,7 @@ def create_app(database_path=None, secret_key=None):
             "maker": row["maker"],
             "unit": row["unit"],
             "transmission": row["transmission"],
+            "color": row["color"],
             "plateNo": row["plate_no"],
             "yearModel": row["year_model"],
             "fuelType": row["fuel_type"],
@@ -224,15 +309,16 @@ def create_app(database_path=None, secret_key=None):
     def validated_unit(payload):
         if not isinstance(payload, dict):
             return None, "Enter valid unit details."
-        makers = ("Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan")
+        makers = ("Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan", "Suzuki")
         maker = payload.get("maker")
         text_fields = {
             "unit": ("unit", 100),
             "transmission": ("transmission", 40),
+            "color": ("color", 40),
             "plateNo": ("plateNo", 20),
             "fuelType": ("fuelType", 40),
         }
-        optional_fields = {"plateNo"}
+        optional_fields = {"color", "plateNo"}
         if maker not in makers:
             return None, "Choose a maker from the list."
         values = {}
@@ -257,14 +343,17 @@ def create_app(database_path=None, secret_key=None):
         if not 1900 <= year_model <= 2100:
             return None, "Enter a valid year model."
         selling_price = payload.get("sellingPrice")
-        if isinstance(selling_price, bool):
+        if selling_price is None:
+            selling_price = None
+        elif isinstance(selling_price, bool):
             return None, "Enter a valid selling price."
-        try:
-            selling_price = float(selling_price)
-        except (TypeError, ValueError, OverflowError):
-            return None, "Enter a valid selling price."
-        if not 0 <= selling_price <= 9999999999.99 or not math.isfinite(selling_price):
-            return None, "Enter a valid selling price."
+        else:
+            try:
+                selling_price = float(selling_price)
+            except (TypeError, ValueError, OverflowError):
+                return None, "Enter a valid selling price."
+            if not 0 <= selling_price <= 9999999999.99 or not math.isfinite(selling_price):
+                return None, "Enter a valid selling price."
         available = payload.get("available", True)
         if not isinstance(available, bool):
             return None, "Choose a valid availability status."
@@ -272,10 +361,11 @@ def create_app(database_path=None, secret_key=None):
             "maker": maker,
             "unit": values["unit"],
             "transmission": values["transmission"],
+            "color": values["color"],
             "plateNo": values["plateNo"],
             "yearModel": year_model,
             "fuelType": values["fuelType"],
-            "sellingPrice": round(selling_price, 2),
+            "sellingPrice": round(selling_price, 2) if selling_price is not None else None,
             "available": available,
         }, None
 
@@ -314,11 +404,11 @@ def create_app(database_path=None, secret_key=None):
             connection.execute(
                 """
                 INSERT INTO units
-                    (id, maker, unit, transmission, plate_no, year_model, fuel_type, selling_price, available)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, maker, unit, transmission, color, plate_no, year_model, fuel_type, selling_price, available)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    unit_id, unit["maker"], unit["unit"], unit["transmission"], unit["plateNo"],
+                    unit_id, unit["maker"], unit["unit"], unit["transmission"], unit["color"], unit["plateNo"],
                     unit["yearModel"], unit["fuelType"], unit["sellingPrice"], int(unit["available"]),
                 ),
             )
@@ -336,12 +426,12 @@ def create_app(database_path=None, secret_key=None):
         with database_connection(app.config["DATABASE"]) as connection:
             result = connection.execute(
                 """
-                UPDATE units SET maker = ?, unit = ?, transmission = ?, plate_no = ?,
+                UPDATE units SET maker = ?, unit = ?, transmission = ?, color = ?, plate_no = ?,
                     year_model = ?, fuel_type = ?, selling_price = ?, available = ?
                 WHERE id = ?
                 """,
                 (
-                    unit["maker"], unit["unit"], unit["transmission"], unit["plateNo"],
+                    unit["maker"], unit["unit"], unit["transmission"], unit["color"], unit["plateNo"],
                     unit["yearModel"], unit["fuelType"], unit["sellingPrice"], int(available), unit_id,
                 ),
             )

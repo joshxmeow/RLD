@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
@@ -123,6 +124,7 @@ class LocalServerTests(unittest.TestCase):
             "maker": "Toyota",
             "unit": "Hilux 2.4 E",
             "transmission": "Automatic",
+            "color": "Silver",
             "plateNo": "ABC-123",
             "yearModel": 2024,
             "fuelType": "Diesel",
@@ -135,12 +137,11 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         saved = created.json["unit"]
         self.assertEqual(saved["maker"], "Toyota")
+        self.assertEqual(saved["color"], "Silver")
         self.assertEqual(saved["sellingPrice"], 1450000)
         self.assertTrue(saved["available"])
-        self.assertEqual(
-            self.client.get("/api/units", base_url=self.base_url).json["units"],
-            [saved],
-        )
+        listed_units = self.client.get("/api/units", base_url=self.base_url).json["units"]
+        self.assertIn(saved, listed_units)
 
         updated = self.client.put(
             f"/api/units/{saved['id']}",
@@ -149,6 +150,7 @@ class LocalServerTests(unittest.TestCase):
         )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json["unit"]["unit"], "Hilux 2.4 G")
+        self.assertEqual(updated.json["unit"]["color"], "Silver")
         self.assertFalse(updated.json["unit"]["available"])
         invalid = self.client.put(
             f"/api/units/{saved['id']}",
@@ -173,17 +175,100 @@ class LocalServerTests(unittest.TestCase):
             400,
         )
 
+        unpriced = self.client.post(
+            "/api/units",
+            base_url=self.base_url,
+            json={
+                **unit_data,
+                "maker": "Suzuki",
+                "unit": "Unknown price",
+                "color": "",
+                "plateNo": "SUZ-001",
+                "sellingPrice": None,
+            },
+        )
+        self.assertEqual(unpriced.status_code, 201)
+        self.assertIsNone(unpriced.json["unit"]["sellingPrice"])
+
         deleted = self.client.delete(
             f"/api/units/{saved['id']}", base_url=self.base_url
         )
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(self.client.get("/api/units", base_url=self.base_url).json["units"], [])
+        remaining_ids = {
+            unit["id"]
+            for unit in self.client.get("/api/units", base_url=self.base_url).json["units"]
+        }
+        self.assertNotIn(saved["id"], remaining_ids)
         self.assertEqual(
             self.client.delete(
                 f"/api/units/{saved['id']}", base_url=self.base_url
             ).status_code,
             404,
         )
+
+    def test_bundled_price_list_includes_colors_and_expands_transmission_codes(self):
+        self.assertEqual(self.login().status_code, 200)
+        units = self.client.get("/api/units", base_url=self.base_url).json["units"]
+        self.assertEqual(len(units), 29)
+        city = next(unit for unit in units if unit["plateNo"] == "ABD 9854")
+        self.assertEqual(city["unit"], "CITY")
+        self.assertEqual(city["color"], "Modern Steel")
+        self.assertEqual(city["transmission"], "Manual")
+        dmax = next(unit for unit in units if unit["plateNo"] == "FTF 574")
+        self.assertIsNone(dmax["sellingPrice"])
+
+        restarted_app = create_app(
+            database_path=Path(self.temporary_directory.name) / "test.sqlite3",
+            secret_key="test-secret",
+        )
+        restarted_client = restarted_app.test_client()
+        self.assertEqual(self.login(restarted_client).status_code, 200)
+        self.assertEqual(
+            len(restarted_client.get("/api/units", base_url=self.base_url).json["units"]),
+            29,
+        )
+
+    def test_existing_unit_database_migrates_color_and_unpriced_support(self):
+        database_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE units (
+                    id TEXT PRIMARY KEY,
+                    maker TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    transmission TEXT NOT NULL,
+                    plate_no TEXT NOT NULL,
+                    year_model INTEGER NOT NULL,
+                    fuel_type TEXT NOT NULL,
+                    selling_price REAL NOT NULL CHECK (selling_price >= 0),
+                    available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1))
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO units
+                    (id, maker, unit, transmission, plate_no, year_model,
+                     fuel_type, selling_price, available)
+                VALUES ('legacy-unit', 'Toyota', 'Legacy', 'Manual', 'LEGACY-1',
+                    2010, 'Diesel', 100000, 1)
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated_app = create_app(database_path=database_path, secret_key="test-secret")
+        migrated_client = migrated_app.test_client()
+        self.assertEqual(self.login(migrated_client).status_code, 200)
+        migrated_units = migrated_client.get(
+            "/api/units", base_url=self.base_url
+        ).json["units"]
+        legacy = next(unit for unit in migrated_units if unit["id"] == "legacy-unit")
+        self.assertEqual(legacy["color"], "")
+        self.assertEqual(legacy["sellingPrice"], 100000)
 
     def test_estimate_sync_uses_latest_client_timestamp_and_tombstones(self):
         self.assertEqual(self.login().status_code, 200)
