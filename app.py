@@ -6,13 +6,17 @@ import re
 import secrets
 import socket
 import sqlite3
+import shutil
 import tempfile
+import zipfile
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_from_directory, session
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory, session
+from PIL import Image, UnidentifiedImageError
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
@@ -31,7 +35,11 @@ USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]{3,30}$")
 PUBLIC_FILES = {
     "index.html", "style.css", "script.js", "manifest.webmanifest", "service-worker.js",
     "assets/icons/rld_logo.png", "assets/icons/logout.png", "assets/icons/clear.png",
-    "assets/icons/print.png", "assets/icons/save.png", "assets/icons/icon.svg",
+    "assets/icons/print.png", "assets/icons/save.png",
+    "assets/icons/add.png", "assets/icons/dark_mode.png", "assets/icons/light_mode.png",
+    "assets/icons/images.png", "assets/icons/search.png", "assets/icons/sort.png",
+    "assets/icons/edit.png", "assets/icons/delete.png", "assets/icons/cancel.png",
+    "assets/icons/set_date.png",
     "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
 }
 
@@ -173,6 +181,18 @@ def init_db(database_path):
             connection.execute("DROP TABLE units_legacy")
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS unit_images (
+                id TEXT PRIMARY KEY,
+                unit_id TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+                original_name TEXT NOT NULL,
+                extension TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS unit_price_list_imports (
                 version TEXT PRIMARY KEY,
                 imported_at TEXT NOT NULL
@@ -240,10 +260,19 @@ def create_app(database_path=None, secret_key=None):
         SESSION_COOKIE_SECURE=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
-        MAX_CONTENT_LENGTH=2 * 1024 * 1024,
+        MAX_CONTENT_LENGTH=102 * 1024 * 1024,
         DATABASE=str(database_path),
     )
     init_db(app.config["DATABASE"])
+
+    @app.before_request
+    def limit_non_image_request_size():
+        if (
+            request.content_length is not None
+            and request.content_length > 2 * 1024 * 1024
+            and request.endpoint != "add_unit_images"
+        ):
+            abort(413, description="Request body exceeds the 2 MB limit.")
 
     def current_user():
         username = session.get("username")
@@ -282,6 +311,19 @@ def create_app(database_path=None, secret_key=None):
         expected = request.host_url.rstrip("/")
         if origin.rstrip("/") != expected:
             abort(403, description="Requests from another website are not allowed.")
+
+    def unit_image_directory(unit_id):
+        safe_unit_id = hashlib.sha256(unit_id.encode("utf-8")).hexdigest()
+        return data_dir / "unit-images" / safe_unit_id
+
+    def unit_image_record(row):
+        return {
+            "id": row["id"],
+            "name": row["original_name"],
+            "contentType": row["content_type"],
+            "createdAt": row["created_at"],
+            "url": f"/api/units/{row['unit_id']}/images/{row['id']}",
+        }
 
     def estimate_record(row):
         return {
@@ -450,7 +492,161 @@ def create_app(database_path=None, secret_key=None):
             result = connection.execute("DELETE FROM units WHERE id = ?", (unit_id,))
         if result.rowcount == 0:
             return jsonify(error="That unit no longer exists."), 404
+        image_directory = unit_image_directory(unit_id)
+        if image_directory.exists():
+            try:
+                shutil.rmtree(image_directory)
+            except OSError as error:
+                app.logger.exception("Could not remove images for unit %s", unit_id)
+                return jsonify(
+                    id=unit_id,
+                    status="deleted",
+                    warning=f"The unit was deleted, but its image files could not be removed: {error}",
+                )
         return jsonify(id=unit_id, status="deleted")
+
+    @app.get("/api/units/<unit_id>/images")
+    @login_required
+    def list_unit_images(unit_id):
+        with database_connection(app.config["DATABASE"]) as connection:
+            if connection.execute("SELECT 1 FROM units WHERE id = ?", (unit_id,)).fetchone() is None:
+                return jsonify(error="That unit no longer exists."), 404
+            rows = connection.execute(
+                "SELECT * FROM unit_images WHERE unit_id = ? ORDER BY created_at, id",
+                (unit_id,),
+            ).fetchall()
+        return jsonify(images=[unit_image_record(row) for row in rows], limit=20)
+
+    @app.post("/api/units/<unit_id>/images")
+    @login_required
+    def add_unit_images(unit_id):
+        require_same_origin()
+        uploads = request.files.getlist("images")
+        if not uploads:
+            return jsonify(error="Choose one or more images to upload."), 400
+        if len(uploads) > 20:
+            return jsonify(error="You can upload up to 20 images at a time."), 400
+
+        with database_connection(app.config["DATABASE"]) as connection:
+            if connection.execute("SELECT 1 FROM units WHERE id = ?", (unit_id,)).fetchone() is None:
+                return jsonify(error="That unit no longer exists."), 404
+            existing_count = connection.execute(
+                "SELECT COUNT(*) FROM unit_images WHERE unit_id = ?", (unit_id,)
+            ).fetchone()[0]
+        if existing_count + len(uploads) > 20:
+            return jsonify(error=f"This unit can have up to 20 images. It currently has {existing_count}."), 400
+
+        allowed_formats = {
+            "JPEG": ("jpg", "image/jpeg"),
+            "PNG": ("png", "image/png"),
+            "WEBP": ("webp", "image/webp"),
+        }
+        prepared_uploads = []
+        for upload in uploads:
+            if not upload.filename:
+                return jsonify(error="An uploaded image has no filename."), 400
+            content = upload.stream.read(5 * 1024 * 1024 + 1)
+            if not content or len(content) > 5 * 1024 * 1024:
+                return jsonify(error="Each image must be 5 MB or smaller."), 400
+            try:
+                with Image.open(BytesIO(content)) as image:
+                    image_format = image.format
+                    if image.width * image.height > 40_000_000:
+                        return jsonify(error="Images must be 40 megapixels or smaller."), 400
+                    image.verify()
+            except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+                return jsonify(error="Upload valid JPEG, PNG, or WebP images only."), 400
+            if image_format not in allowed_formats:
+                return jsonify(error="Upload valid JPEG, PNG, or WebP images only."), 400
+            safe_name = upload.filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+            safe_name = re.sub(r"[\x00-\x1f\x7f]", "", safe_name)[:255] or f"unit-image.{allowed_formats[image_format][0]}"
+            image_id = secrets.token_hex(16)
+            extension, content_type = allowed_formats[image_format]
+            prepared_uploads.append((image_id, safe_name, extension, content_type, content))
+
+        image_directory = unit_image_directory(unit_id)
+        image_directory.mkdir(parents=True, exist_ok=True)
+        saved_paths = []
+        try:
+            with database_connection(app.config["DATABASE"]) as connection:
+                current_count = connection.execute(
+                    "SELECT COUNT(*) FROM unit_images WHERE unit_id = ?", (unit_id,)
+                ).fetchone()[0]
+                if current_count + len(prepared_uploads) > 20:
+                    return jsonify(error=f"This unit can have up to 20 images. It currently has {current_count}."), 400
+                for image_id, original_name, extension, content_type, content in prepared_uploads:
+                    path = image_directory / f"{image_id}.{extension}"
+                    path.write_bytes(content)
+                    saved_paths.append(path)
+                    connection.execute(
+                        """
+                        INSERT INTO unit_images (id, unit_id, original_name, extension, content_type, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (image_id, unit_id, original_name, extension, content_type, utc_now()),
+                    )
+                rows = connection.execute(
+                    "SELECT * FROM unit_images WHERE unit_id = ? ORDER BY created_at, id",
+                    (unit_id,),
+                ).fetchall()
+        except Exception:
+            for path in saved_paths:
+                path.unlink(missing_ok=True)
+            raise
+        return jsonify(images=[unit_image_record(row) for row in rows]), 201
+
+    @app.get("/api/units/<unit_id>/images/<image_id>")
+    @login_required
+    def get_unit_image(unit_id, image_id):
+        with database_connection(app.config["DATABASE"]) as connection:
+            row = connection.execute(
+                "SELECT extension, content_type FROM unit_images WHERE id = ? AND unit_id = ?",
+                (image_id, unit_id),
+            ).fetchone()
+        if row is None:
+            return jsonify(error="That unit image no longer exists."), 404
+        image_path = unit_image_directory(unit_id) / f"{image_id}.{row['extension']}"
+        if not image_path.is_file():
+            app.logger.error("Unit image file is missing for unit %s image %s", unit_id, image_id)
+            return jsonify(error="The image file is missing from server storage."), 404
+        response = send_file(image_path, mimetype=row["content_type"], as_attachment=False)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.get("/api/units/<unit_id>/images-download")
+    @login_required
+    def download_unit_images(unit_id):
+        image_ids = list(dict.fromkeys(request.args.getlist("imageIds")))
+        if not image_ids or len(image_ids) > 20:
+            return jsonify(error="Select between 1 and 20 images to download."), 400
+        with database_connection(app.config["DATABASE"]) as connection:
+            if connection.execute("SELECT 1 FROM units WHERE id = ?", (unit_id,)).fetchone() is None:
+                return jsonify(error="That unit no longer exists."), 404
+            placeholders = ",".join("?" for _ in image_ids)
+            rows = connection.execute(
+                f"SELECT * FROM unit_images WHERE unit_id = ? AND id IN ({placeholders})",
+                (unit_id, *image_ids),
+            ).fetchall()
+        if len(rows) != len(image_ids):
+            return jsonify(error="One or more selected images no longer exist."), 404
+
+        archive_buffer = BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for row in rows:
+                image_path = unit_image_directory(unit_id) / f"{row['id']}.{row['extension']}"
+                if not image_path.is_file():
+                    app.logger.error("Unit image file is missing for unit %s image %s", unit_id, row["id"])
+                    return jsonify(error=f"Image {row['original_name']} is missing from server storage."), 404
+                archive_name = re.sub(r"[\x00-\x1f\x7f]", "", row["original_name"].replace("\\", "/").rsplit("/", 1)[-1])
+                archive_name = archive_name.strip(" .")[:200] or f"unit-image.{row['extension']}"
+                archive.writestr(f"{row['id'][:8]}_{archive_name}", image_path.read_bytes())
+        archive_buffer.seek(0)
+        return send_file(
+            archive_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name="unit-images.zip",
+        )
 
     @app.post("/api/login")
     def login():
@@ -887,40 +1083,60 @@ def save_estimate_workbook(record, data_dir):
 
     bundle_all_prices = data.get("bundleAllPrices", False) is True
     bundle_labor = data.get("bundleLabor", True) is True
-    for section_start, section_end, is_parts_section in work_sections:
-        if section_end - section_start < 2:
-            continue
-        first_sheet_row = work_row_start + section_start
-        last_sheet_row = work_row_start + section_end - 1
-        if bundle_all_prices:
-            for column, cost_index in ((3, 1), (4, 2)):
-                section_values = [work_rows[index][cost_index] for index in range(section_start, section_end)]
-                total = sum(clean_excel_amount(value) for value in section_values)
-                if total == 0:
-                    continue
-                sheet.cell(first_sheet_row, column, total)
-                sheet.cell(first_sheet_row, column).number_format = '"PHP " #,##0.00'
-                sheet.merge_cells(
-                    start_row=first_sheet_row, start_column=column,
-                    end_row=last_sheet_row, end_column=column
-                )
-                apply_merged_border(sheet, first_sheet_row, last_sheet_row, column, thin_black)
-        elif bundle_labor and not is_parts_section:
-            labor_values = [
-                work_rows[index][1] for index in range(section_start, section_end)
-                if excel_has_value(work_rows[index][1])
-            ]
-            if len(labor_values) == 1:
-                sheet.cell(first_sheet_row, 3, clean_excel_amount(labor_values[0]))
-                sheet.cell(first_sheet_row, 3).number_format = '"PHP " #,##0.00'
-                sheet.merge_cells(
-                    start_row=first_sheet_row, start_column=3,
-                    end_row=last_sheet_row, end_column=3
-                )
-                apply_merged_border(sheet, first_sheet_row, last_sheet_row, 3, thin_black)
+    if bundle_all_prices:
+        total = sum(
+            clean_excel_amount(labor) + clean_excel_amount(parts)
+            for _, labor, parts in work_rows
+        )
+        for index in range(len(work_rows)):
+            sheet.cell(work_row_start + index, 3).value = None
+            sheet.cell(work_row_start + index, 4).value = None
+        if work_rows and total != 0:
+            first_work_sheet_row = work_row_start
+            last_work_sheet_row = work_row_start + len(work_rows) - 1
+            price_cell = sheet.cell(first_work_sheet_row, 3, total)
+            price_cell.number_format = '"PHP " #,##0.00'
+            price_cell.alignment = centered
+            sheet.merge_cells(
+                start_row=first_work_sheet_row,
+                start_column=3,
+                end_row=last_work_sheet_row,
+                end_column=4,
+            )
+            apply_merged_border(
+                sheet, first_work_sheet_row, last_work_sheet_row, 3, thin_black
+            )
+            apply_merged_border(
+                sheet, first_work_sheet_row, last_work_sheet_row, 4, thin_black
+            )
+    else:
+        for section_start, section_end, is_parts_section in work_sections:
+            if section_end - section_start < 2:
+                continue
+            first_sheet_row = work_row_start + section_start
+            last_sheet_row = work_row_start + section_end - 1
+            if bundle_labor and not is_parts_section:
+                labor_values = [
+                    work_rows[index][1] for index in range(section_start, section_end)
+                    if excel_has_value(work_rows[index][1])
+                ]
+                if len(labor_values) == 1:
+                    sheet.cell(first_sheet_row, 3, clean_excel_amount(labor_values[0]))
+                    sheet.cell(first_sheet_row, 3).number_format = '"PHP " #,##0.00'
+                    sheet.merge_cells(
+                        start_row=first_sheet_row, start_column=3,
+                        end_row=last_sheet_row, end_column=3
+                    )
+                    apply_merged_border(sheet, first_sheet_row, last_sheet_row, 3, thin_black)
 
     totals = [
-        ("TOTAL LABOR/MATERIALS/PARTS:", data.get("totLabor", 0), data.get("totParts", 0)),
+        (
+            "TOTAL LABOR/MATERIALS/PARTS:",
+            sum(clean_excel_amount(value) for _, labor, parts in work_rows
+                for value in (labor, parts))
+            if bundle_all_prices else data.get("totLabor", 0),
+            None if bundle_all_prices else data.get("totParts", 0),
+        ),
         ("DOWNPAYMENT:", data.get("downpayment", 0), None),
         ("TOTAL AMOUNT DUE:", data.get("totDue", 0), None),
     ]

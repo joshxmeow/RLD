@@ -12,6 +12,7 @@ const UNIT_MAKERS = ["Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford"
 let editingEstimateId = null;
 let editingUnitId = null;
 let units = [];
+let unitSortMode = "maker";
 let unitSyncPromise = null;
 let unitSwipeStart = null;
 let syncQueueRunning = false;
@@ -27,13 +28,18 @@ function apiUrl(path) {
 
 function applyTheme(isLight) {
     document.documentElement.dataset.theme = isLight ? "light" : "dark";
-    document.getElementById("themeToggle").checked = isLight;
+    const themeToggle = document.getElementById("themeToggle");
+    themeToggle.setAttribute("aria-pressed", String(isLight));
+    themeToggle.setAttribute("aria-label", `Switch to ${isLight ? "dark" : "light"} mode`);
+    themeToggle.title = `Switch to ${isLight ? "dark" : "light"} mode`;
+    document.getElementById("themeIcon").src =
+        `assets/icons/${isLight ? "dark_mode" : "light_mode"}.png`;
     document.querySelector('meta[name="theme-color"]').content = isLight ? "#f4f7fb" : "#0b0f19";
 }
 
 applyTheme(localStorage.getItem(THEME_KEY) === "light");
-document.getElementById("themeToggle").addEventListener("change", event => {
-    const isLight = event.currentTarget.checked;
+document.getElementById("themeToggle").addEventListener("click", event => {
+    const isLight = event.currentTarget.getAttribute("aria-pressed") !== "true";
     localStorage.setItem(THEME_KEY, isLight ? "light" : "dark");
     applyTheme(isLight);
 });
@@ -88,7 +94,9 @@ async function apiRequest(path, options = {}) {
             credentials: "same-origin",
             ...options,
             headers: {
-                ...(options.body ? { "Content-Type": "application/json" } : {}),
+                ...(options.body && !(options.body instanceof FormData)
+                    ? { "Content-Type": "application/json" }
+                    : {}),
                 ...options.headers
             },
             signal: controller.signal
@@ -687,65 +695,256 @@ function renderUnits() {
         return;
     }
 
-    UNIT_MAKERS.forEach(maker => {
-        const makerUnits = matchingUnits.filter(unit => unit.maker === maker);
-        if (makerUnits.length === 0) return;
+    const makeUnitSection = (headingText, makerUnits) => {
         const section = document.createElement("section");
         section.className = "unit-maker-section";
         const heading = document.createElement("h2");
-        heading.textContent = maker;
+        heading.textContent = headingText;
         section.appendChild(heading);
-
         makerUnits.forEach(unit => {
-            const card = document.createElement("article");
-            card.className = "unit-card";
-            card.dataset.unitId = unit.id;
-            const titleRow = document.createElement("div");
-            titleRow.className = "unit-card-heading";
-            const title = document.createElement("h3");
-            title.textContent = unit.unit;
-            titleRow.appendChild(title);
-            const status = document.createElement("button");
-            status.type = "button";
-            status.className = `unit-availability ${unit.available ? "available" : "unavailable"}`;
-            status.textContent = unit.available ? "Available" : "Unavailable";
-            status.setAttribute("aria-label", `${status.textContent}. Toggle availability for ${unit.unit}`);
-            status.addEventListener("click", () => toggleUnitAvailability(unit));
-            titleRow.appendChild(status);
-
-            const details = document.createElement("dl");
-            details.className = "unit-details";
-            [
-                ["Transmission", unit.transmission],
-                ...(unit.color ? [["Color", unit.color]] : []),
-                ["Plate no.", unit.plateNo],
-                ["Year model", unit.yearModel],
-                ["Fuel type", unit.fuelType]
-            ].forEach(([label, value]) => {
-                const item = document.createElement("div");
-                const term = document.createElement("dt");
-                term.textContent = label;
-                const description = document.createElement("dd");
-                description.textContent = value;
-                item.append(term, description);
-                details.appendChild(item);
-            });
-            const footer = document.createElement("div");
-            footer.className = "unit-card-footer";
-            const price = document.createElement("strong");
-            price.className = "unit-price";
-            price.textContent = formatUnitPrice(unit.sellingPrice);
-            const edit = document.createElement("button");
-            edit.type = "button";
-            edit.className = "request-button";
-            edit.textContent = "Edit";
-            edit.addEventListener("click", () => beginUnitEdit(unit));
-            footer.append(price, edit);
-            card.append(titleRow, details, footer);
-            section.appendChild(card);
+            section.appendChild(createUnitCard(unit));
         });
         list.appendChild(section);
+    };
+
+    if (unitSortMode === "maker") {
+        UNIT_MAKERS.forEach(maker => {
+            const makerUnits = matchingUnits.filter(unit => unit.maker === maker);
+            if (makerUnits.length) makeUnitSection(maker, makerUnits);
+        });
+        return;
+    }
+
+    const descending = unitSortMode.endsWith("descending");
+    const sortedUnits = matchingUnits.slice().sort((first, second) => {
+        if (unitSortMode.startsWith("price")) {
+            const firstPrice = first.sellingPrice == null ? null : Number(first.sellingPrice);
+            const secondPrice = second.sellingPrice == null ? null : Number(second.sellingPrice);
+            if (firstPrice == null || secondPrice == null) {
+                if (firstPrice == null && secondPrice != null) return 1;
+                if (secondPrice == null && firstPrice != null) return -1;
+            } else if (firstPrice !== secondPrice) {
+                return (firstPrice - secondPrice) * (descending ? -1 : 1);
+            }
+        } else if (unitSortMode === "year-descending" && first.yearModel !== second.yearModel) {
+            return Number(second.yearModel) - Number(first.yearModel);
+        }
+        const makerOrder = first.maker.localeCompare(second.maker, undefined, { sensitivity: "base" });
+        const modelOrder = first.unit.localeCompare(second.unit, undefined, { sensitivity: "base" });
+        return makerOrder || modelOrder;
     });
+    const sortLabels = {
+        "price-ascending": "Price · Low to high",
+        "price-descending": "Price · High to low",
+        "year-descending": "Year model · Newest to oldest"
+    };
+    makeUnitSection(sortLabels[unitSortMode], sortedUnits);
+}
+
+function createUnitCard(unit) {
+    const card = document.createElement("article");
+    card.className = "unit-card";
+    card.dataset.unitId = unit.id;
+    const titleRow = document.createElement("div");
+    titleRow.className = "unit-card-heading";
+    const title = document.createElement("h3");
+    title.textContent = unit.unit;
+    titleRow.appendChild(title);
+    const status = document.createElement("button");
+    status.type = "button";
+    status.className = `unit-availability ${unit.available ? "available" : "unavailable"}`;
+    status.textContent = unit.available ? "Available" : "Unavailable";
+    status.setAttribute("aria-label", `${status.textContent}. Toggle availability for ${unit.unit}`);
+    status.addEventListener("click", () => toggleUnitAvailability(unit));
+    titleRow.appendChild(status);
+
+    const details = document.createElement("dl");
+    details.className = "unit-details";
+    [
+        ["Transmission", unit.transmission],
+        ...(unit.color ? [["Color", unit.color]] : []),
+        ["Plate no.", unit.plateNo],
+        ["Year model", unit.yearModel],
+        ["Fuel type", unit.fuelType]
+    ].forEach(([label, value]) => {
+        const item = document.createElement("div");
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const description = document.createElement("dd");
+        description.textContent = value;
+        item.append(term, description);
+        details.appendChild(item);
+    });
+    const footer = document.createElement("div");
+    footer.className = "unit-card-footer";
+    const price = document.createElement("strong");
+    price.className = "unit-price";
+    price.textContent = formatUnitPrice(unit.sellingPrice);
+    const edit = createUnitIconButton("edit", `Edit ${unit.unit}`);
+    edit.classList.add("unit-edit-button");
+    edit.addEventListener("click", () => beginUnitEdit(unit));
+    const imagesButton = createUnitIconButton("images", `View images for ${unit.unit}`);
+    imagesButton.classList.add("unit-images-toggle");
+    const imagesPanel = document.createElement("div");
+    imagesPanel.className = "unit-images-panel";
+    imagesPanel.hidden = true;
+    imagesButton.addEventListener("click", () => {
+        imagesPanel.hidden = !imagesPanel.hidden;
+        if (!imagesPanel.hidden) loadUnitImages(unit, imagesPanel);
+    });
+    footer.append(price, imagesButton, edit);
+    card.append(titleRow, details, footer, imagesPanel);
+    return card;
+}
+
+function unitImagesUrl(unitId) {
+    return `/api/units/${encodeURIComponent(unitId)}/images`;
+}
+
+function createUnitIconButton(icon, label, title = label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "request-button icon-button";
+    button.setAttribute("aria-label", label);
+    button.title = title;
+    const image = document.createElement("img");
+    image.src = `assets/icons/${icon}.png`;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    button.appendChild(image);
+    return button;
+}
+
+async function loadUnitImages(unit, panel) {
+    panel.replaceChildren();
+    const status = document.createElement("p");
+    status.className = "unit-images-status";
+    panel.appendChild(status);
+    const pendingCreation = readUnitChanges().some(change =>
+        change.type === "create" && change.localId === unit.id
+    );
+    if (!navigator.onLine || !serverAuthenticated || pendingCreation) {
+        status.textContent = "Connect to the server and sync this unit to manage its images.";
+        return;
+    }
+
+    status.textContent = "Loading images...";
+    try {
+        const result = await apiRequest(unitImagesUrl(unit.id));
+        if (panel.hidden) return;
+        panel.replaceChildren();
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "unit-images-toolbar";
+        const count = document.createElement("span");
+        count.className = "unit-images-count";
+        count.textContent = `${result.images.length} / ${result.limit} images`;
+        const uploadInput = document.createElement("input");
+        uploadInput.type = "file";
+        uploadInput.accept = "image/jpeg,image/png,image/webp";
+        uploadInput.multiple = true;
+        uploadInput.hidden = true;
+        uploadInput.setAttribute("aria-label", `Choose images for ${unit.unit}`);
+        const uploadButton = createUnitIconButton("images", "Add images");
+        uploadButton.disabled = result.images.length >= result.limit;
+        uploadButton.addEventListener("click", () => uploadInput.click());
+        const downloadButton = createUnitIconButton("save", "Download selected images");
+        downloadButton.disabled = true;
+        const updateDownloadButton = () => {
+            downloadButton.disabled = panel.querySelectorAll(".unit-image-select:checked").length === 0;
+        };
+        downloadButton.addEventListener("click", () => downloadSelectedUnitImages(unit, panel));
+        toolbar.append(count, uploadButton, downloadButton, uploadInput);
+        panel.appendChild(toolbar);
+
+        const gallery = document.createElement("div");
+        gallery.className = "unit-image-gallery";
+        if (!result.images.length) {
+            const empty = document.createElement("p");
+            empty.className = "unit-images-status";
+            empty.textContent = "No images have been added to this unit.";
+            gallery.appendChild(empty);
+        }
+        result.images.forEach(image => {
+            const item = document.createElement("div");
+            item.className = "unit-image-item";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "unit-image-select";
+            checkbox.value = image.id;
+            checkbox.setAttribute("aria-label", `Select ${image.name}`);
+            checkbox.addEventListener("change", updateDownloadButton);
+            const link = document.createElement("a");
+            link.href = apiUrl(image.url).href;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.title = `View ${image.name}`;
+            const thumbnail = document.createElement("img");
+            thumbnail.src = link.href;
+            thumbnail.alt = image.name;
+            thumbnail.loading = "lazy";
+            link.appendChild(thumbnail);
+            const name = document.createElement("span");
+            name.textContent = image.name;
+            item.append(checkbox, link, name);
+            gallery.appendChild(item);
+        });
+        panel.appendChild(gallery);
+        uploadInput.addEventListener("change", async () => {
+            const files = Array.from(uploadInput.files || []);
+            if (!files.length) return;
+            if (files.length + result.images.length > result.limit) {
+                document.getElementById("unitsMessage").textContent =
+                    `This unit can have up to ${result.limit} images. It currently has ${result.images.length}.`;
+                uploadInput.value = "";
+                return;
+            }
+            const formData = new FormData();
+            files.forEach(file => formData.append("images", file));
+            uploadButton.disabled = true;
+            try {
+                await apiRequest(unitImagesUrl(unit.id), { method: "POST", body: formData });
+                document.getElementById("unitsMessage").textContent =
+                    `${files.length} image${files.length === 1 ? "" : "s"} saved on the server for ${unit.unit}.`;
+                await loadUnitImages(unit, panel);
+            } catch (error) {
+                document.getElementById("unitsMessage").textContent = `Could not upload images: ${error.message}`;
+                uploadButton.disabled = false;
+            } finally {
+                uploadInput.value = "";
+            }
+        });
+    } catch (error) {
+        status.textContent = `Could not load unit images: ${error.message}`;
+        if (error.status === 401) serverAuthenticated = false;
+    }
+}
+
+async function downloadSelectedUnitImages(unit, panel) {
+    const selectedIds = Array.from(panel.querySelectorAll(".unit-image-select:checked"), input => input.value);
+    if (!selectedIds.length) return;
+    const query = new URLSearchParams();
+    selectedIds.forEach(id => query.append("imageIds", id));
+    try {
+        const response = await fetch(apiUrl(`${unitImagesUrl(unit.id)}-download?${query}`), {
+            credentials: "same-origin"
+        });
+        if (!response.ok) {
+            const errorBody = await response.json().catch(() => ({}));
+            throw new Error(errorBody.error || `Server returned ${response.status}.`);
+        }
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.download = `${unit.unit.replace(/[\\/:*?"<>|]/g, "_")}-images.zip`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+        document.getElementById("unitsMessage").textContent = `Could not download selected images: ${error.message}`;
+    }
 }
 
 function readUnitChanges() {
@@ -880,8 +1079,9 @@ function beginUnitEdit(unit = null) {
     document.getElementById("unitSellingPrice").value = unit ? unit.sellingPrice : "";
     document.getElementById("unitAvailability").value = String(unit ? unit.available : true);
     document.getElementById("deleteUnitBtn").hidden = !unit;
-    document.getElementById("unitForm").querySelector('[type="submit"]').textContent =
-        unit ? "Save changes" : "Save unit";
+    const saveButton = document.getElementById("unitForm").querySelector('[type="submit"]');
+    saveButton.setAttribute("aria-label", unit ? "Save changes" : "Save unit");
+    saveButton.title = unit ? "Save changes" : "Save unit";
     form.hidden = false;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     document.getElementById("unitName").focus({ preventScroll: true });
@@ -984,6 +1184,20 @@ async function deleteUnit() {
 }
 
 document.getElementById("addUnitBtn").addEventListener("click", () => beginUnitEdit());
+document.getElementById("unitSortBtn").addEventListener("click", () => {
+    const menu = document.getElementById("unitSortMenu");
+    menu.hidden = !menu.hidden;
+    document.getElementById("unitSortBtn").setAttribute("aria-expanded", String(!menu.hidden));
+});
+document.getElementById("unitSortMenu").addEventListener("click", event => {
+    const option = event.target.closest("[data-unit-sort]");
+    if (!option) return;
+    unitSortMode = option.dataset.unitSort;
+    document.getElementById("unitSortMenu").hidden = true;
+    document.getElementById("unitSortBtn").setAttribute("aria-expanded", "false");
+    document.getElementById("unitSortBtn").title = `Sort units · ${option.textContent}`;
+    renderUnits();
+});
 document.getElementById("unitForm").addEventListener("submit", saveUnit);
 document.getElementById("cancelUnitEdit").addEventListener("click", closeUnitEditor);
 document.getElementById("deleteUnitBtn").addEventListener("click", deleteUnit);
@@ -1081,8 +1295,14 @@ function renderHistory() {
         actions.className = "history-actions";
         const print = document.createElement("button");
         print.type = "button";
-        print.className = "request-button history-action";
-        print.textContent = "Print";
+        print.className = "request-button history-action icon-button";
+        print.setAttribute("aria-label", "Print estimate");
+        print.title = "Print estimate";
+        const printIcon = document.createElement("img");
+        printIcon.src = "assets/icons/print.png";
+        printIcon.alt = "";
+        printIcon.setAttribute("aria-hidden", "true");
+        print.appendChild(printIcon);
         print.addEventListener("click", () => printHistoryEstimate(estimate));
         actions.appendChild(print);
 
@@ -1136,7 +1356,7 @@ function loadHistory() {
 
 document.getElementById("historySearch").addEventListener("input", renderHistory);
 document.addEventListener("click", event => {
-    if (event.target.closest(".history-menu, .job-history-menu")) return;
+    if (event.target.closest(".history-menu, .job-history-menu, .unit-sort-menu, #unitSortBtn")) return;
     document.querySelectorAll(".history-menu-items").forEach(items => {
         items.hidden = true;
         items.previousElementSibling.setAttribute("aria-expanded", "false");
@@ -1145,6 +1365,8 @@ document.addEventListener("click", event => {
         items.hidden = true;
         items.previousElementSibling.setAttribute("aria-expanded", "false");
     });
+    document.getElementById("unitSortMenu").hidden = true;
+    document.getElementById("unitSortBtn").setAttribute("aria-expanded", "false");
 });
 document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
@@ -1153,6 +1375,12 @@ document.addEventListener("keydown", event => {
         items.previousElementSibling.setAttribute("aria-expanded", "false");
         items.previousElementSibling.focus();
     });
+    const sortMenu = document.getElementById("unitSortMenu");
+    if (!sortMenu.hidden) {
+        sortMenu.hidden = true;
+        document.getElementById("unitSortBtn").setAttribute("aria-expanded", "false");
+        document.getElementById("unitSortBtn").focus();
+    }
 });
 
 const JOB_STATUSES = {
@@ -1214,7 +1442,8 @@ function createJobCard(estimate, isHistory) {
     const heading = document.createElement("div");
     heading.className = "job-card-heading";
     const title = document.createElement("h3");
-    title.textContent = [data.makeModel, data.color].filter(Boolean).join(" · ") || "Vehicle details not provided";
+    title.textContent = [data.makeModel && data.makeModel.toLocaleUpperCase(), data.color]
+        .filter(Boolean).join(" · ") || "Vehicle details not provided";
     const statusLabel = document.createElement("span");
     statusLabel.className = `job-status-label job-status-${status}`;
     statusLabel.textContent = isHistory
@@ -1224,7 +1453,9 @@ function createJobCard(estimate, isHistory) {
 
     const details = document.createElement("dl");
     details.className = "job-details";
-    [["Client", data.clientName], ["Client number", data.contact], ["Plate no.", data.plateNo]].forEach(([label, value]) => {
+    [["Client", data.clientName && data.clientName.toLocaleUpperCase()],
+        ["Client number", data.contact], ["Plate no.", data.plateNo && data.plateNo.toLocaleUpperCase()]]
+        .forEach(([label, value]) => {
         const item = document.createElement("div");
         const term = document.createElement("dt");
         term.textContent = label;
@@ -1393,10 +1624,13 @@ function printHistoryEstimate(estimate) {
         saveButtonLabel: document.getElementById("saveBtn").getAttribute("aria-label"),
         saveButtonTitle: document.getElementById("saveBtn").title,
         estimateMessage: document.getElementById("estimateMessage").textContent,
-        dateDisplay: document.getElementById("dateDisplay").textContent
+        dateDisplay: document.getElementById("dateDisplay").textContent,
+        page: (document.querySelector(".nav-button.active-page") || {}).id || "showJobsPage"
     };
+    showPage("estimate");
+    document.getElementById("estimatePage").classList.remove("page-enter");
     populateEstimateForm(estimate.data || {});
-    printEstimate();
+    window.requestAnimationFrame(printEstimate);
 }
 
 function restoreAfterHistoryPrint() {
@@ -1415,6 +1649,14 @@ function restoreAfterHistoryPrint() {
     document.getElementById("estimateMessage").textContent = state.estimateMessage;
     document.getElementById("dateDisplay").textContent = state.dateDisplay;
     updateHiddenDamageNote();
+    const pageByButtonId = {
+        showEstimatePage: "estimate",
+        showUnitsPage: "units",
+        showJobsPage: "jobs",
+        showHistoryPage: "history",
+        showAdminPage: "admin"
+    };
+    showPage(pageByButtonId[state.page] || "jobs");
 }
 
 function getLocalDateString(date = new Date()) {
@@ -1773,6 +2015,63 @@ function updateWorkNumbers() {
 
 function mergeSingleCostsForPrint() {
     const rows = Array.from(document.querySelectorAll('#worksBody tr:not(.print-pad-row)'));
+    const bundleAllPrices = document.getElementById("bundleAllPrices").checked;
+
+    if (bundleAllPrices) {
+        const contentRowIndexes = rows.map((row, index) => {
+            const description = row.querySelector('.works-input').value.trim();
+            const hasCost = Array.from(row.querySelectorAll('.labor-cost, .parts-cost'))
+                .some(input => input.value.trim() !== '');
+            return description !== '' || hasCost ? index : -1;
+        }).filter(index => index !== -1);
+        const total = rows.reduce((sum, row) =>
+            sum + cleanNum(row.querySelector('.labor-cost').value)
+                + cleanNum(row.querySelector('.parts-cost').value), 0);
+
+        const firstContentIndex = contentRowIndexes[0];
+        const lastContentIndex = contentRowIndexes[contentRowIndexes.length - 1];
+        const rowsToMerge = firstContentIndex === undefined
+            ? []
+            : rows.slice(firstContentIndex, lastContentIndex + 1);
+
+        rows.forEach(row => {
+            row.children[1].classList.add('print-merged-source');
+            row.children[2].classList.add('print-merged-source');
+        });
+
+        if (rowsToMerge.length > 0 && total !== 0) {
+            const anchorRow = rowsToMerge[0];
+            const mergedCell = anchorRow.children[1].cloneNode(true);
+            const mergedInput = mergedCell.querySelector('.labor-cost');
+            mergedInput.value = formatPHP(total);
+            mergedInput.readOnly = true;
+            mergedInput.style.textAlign = 'center';
+            mergedCell.colSpan = 2;
+            mergedCell.rowSpan = rowsToMerge.length;
+            mergedCell.style.textAlign = 'center';
+            mergedCell.classList.remove('print-merged-source');
+            mergedCell.classList.add('print-merged-cell');
+            anchorRow.insertBefore(mergedCell, anchorRow.children[1]);
+        }
+
+        const totalsRow = document.querySelector('.totals-section .totals-row');
+        const laborTotalCell = totalsRow.children[1];
+        const partsTotalCell = totalsRow.children[2];
+        const mergedTotalCell = laborTotalCell.cloneNode(true);
+        const mergedTotalInput = mergedTotalCell.querySelector('input');
+        mergedTotalInput.removeAttribute('id');
+        mergedTotalInput.value = formatPHP(
+            cleanNum(document.getElementById('totLabor').value)
+                + cleanNum(document.getElementById('totParts').value)
+        );
+        mergedTotalCell.colSpan = 2;
+        mergedTotalCell.classList.add('print-merged-cell');
+        laborTotalCell.classList.add('print-merged-source');
+        partsTotalCell.classList.add('print-merged-source');
+        totalsRow.insertBefore(mergedTotalCell, laborTotalCell);
+        return;
+    }
+
     let sectionRows = [];
     let isPartsSection = false;
 
@@ -1789,30 +2088,8 @@ function mergeSingleCostsForPrint() {
             rowsToMerge.pop();
         }
 
-        const bundleAllPrices = document.getElementById("bundleAllPrices").checked;
         const bundleLabor = document.getElementById('bundleLabor').checked;
         if (rowsToMerge.length < 2) return;
-
-        if (bundleAllPrices) {
-            const sourceCellsByCost = [1, 2].map(cellIndex =>
-                rowsToMerge.map(row => row.children[cellIndex]));
-            sourceCellsByCost.forEach((sourceCells, costIndex) => {
-                const inputSelector = costIndex === 0 ? ".labor-cost" : ".parts-cost";
-                const total = rowsToMerge.reduce((sum, row) =>
-                    sum + cleanNum(row.querySelector(inputSelector).value), 0);
-                if (total === 0) return;
-
-                const mergedCell = sourceCells[0].cloneNode(true);
-                const mergedInput = mergedCell.querySelector(inputSelector);
-                mergedInput.value = formatPHP(total);
-                mergedInput.readOnly = true;
-                mergedCell.rowSpan = rowsToMerge.length;
-                mergedCell.classList.add("print-merged-cell");
-                sourceCells.forEach(cell => cell.classList.add("print-merged-source"));
-                rowsToMerge[0].insertBefore(mergedCell, sourceCells[0]);
-            });
-            return;
-        }
 
         if (!bundleLabor || isPartsSection) return;
 

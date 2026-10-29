@@ -52,11 +52,9 @@
             <span>Signed in as <strong id="activeUsername"></strong></span>
             <span id="connectionStatus" class="connection-status" role="status" aria-live="polite"></span>
             <button type="button" id="installAppBtn" class="logout-button">Install app</button>
-            <label class="theme-toggle" for="themeToggle">
-                <span>Light mode</span>
-                <input type="checkbox" id="themeToggle" role="switch" aria-label="Light mode">
-                <span class="theme-switch-track" aria-hidden="true"></span>
-            </label>
+            <button type="button" id="themeToggle" class="icon-button theme-toggle" aria-label="Switch to light mode" title="Switch to light mode" aria-pressed="false">
+                <img id="themeIcon" src="assets/icons/light_mode.png" alt="" aria-hidden="true">
+            </button>
             <nav class="app-navigation" aria-label="Main navigation">
                 <button type="button" id="showEstimatePage" class="nav-button" aria-current="page">
                     <span>Estimate</span>
@@ -113,7 +111,7 @@
                 <div class="doc-date">
                     <label>DATE:</label>
                     <span id="dateDisplay" class="formatted-date" aria-live="polite"></span>
-                    <button type="button" id="pickDateBtn" class="date-picker-button no-print" aria-label="Choose estimate date">▦</button>
+                    <button type="button" id="pickDateBtn" class="date-picker-button no-print icon-button" aria-label="Choose estimate date" title="Choose estimate date"><img src="assets/icons/set_date.png" alt="" aria-hidden="true"></button>
                     <input type="date" id="date" class="date-picker-input no-print" aria-label="Estimate date">
                 </div>
             </div>
@@ -142,7 +140,7 @@
 
             <div class="bundle-option no-print">
                 <label><input type="checkbox" id="bundleLabor" checked> Bundle a single labor charge across work items when printing (except * PARTS)</label>
-                <label><input type="checkbox" id="bundleAllPrices"> Bundle all labor and parts prices by section when printing</label>
+                <label><input type="checkbox" id="bundleAllPrices"> Bundle all labor and parts prices into one price when printing</label>
                 <label><input type="checkbox" id="noteHiddenDamage"> Add a red note: hidden damage is not included</label>
             </div>
 
@@ -226,22 +224,28 @@
             </div>
             <p id="estimateMessage" class="auth-message no-print" role="status" aria-live="polite"></p>
         </form>
-        <footer class="page-credit no-print">Developed and designed by: Joshua Kagayutan.</footer>
+        <footer class="page-credit no-print">Developed and designed by Joshua Kagayutan</footer>
         </section>
 
         <section id="unitsPage" class="admin-panel no-print" hidden>
             <div class="units-heading">
                 <div>
-                    <h1>Unit price list</h1>
+                    <h1>Units</h1>
                     <p class="auth-help">Units are saved on this device for offline access and sync when the server is reachable. Browse by maker; swipe or tap a unit to change availability.</p>
                 </div>
-                <button type="button" id="addUnitBtn" class="btn btn-success units-add-button" aria-label="Add unit">+ Add unit</button>
+                <button type="button" id="addUnitBtn" class="btn units-add-button icon-button" aria-label="Add unit" title="Add unit"><img src="assets/icons/add.png" alt="" aria-hidden="true"></button>
             </div>
             <form id="unitSearchForm" class="units-search">
-                <label class="history-search-label" for="unitSearch">Search units</label>
                 <div class="units-search-row">
-                    <input type="search" id="unitSearch" placeholder="Search maker, unit, color, plate, year, fuel, or transmission">
-                    <button type="submit" class="request-button">Search</button>
+                    <input type="search" id="unitSearch" aria-label="Search units" placeholder="Search maker, unit, color, plate, year, fuel, or transmission">
+                    <button type="submit" class="request-button icon-button" aria-label="Search" title="Search"><img src="assets/icons/search.png" alt="" aria-hidden="true"></button>
+                    <button type="button" id="unitSortBtn" class="request-button icon-button" aria-label="Sort units" title="Sort units" aria-expanded="false" aria-controls="unitSortMenu"><img src="assets/icons/sort.png" alt="" aria-hidden="true"></button>
+                </div>
+                <div id="unitSortMenu" class="unit-sort-menu" hidden>
+                    <button type="button" data-unit-sort="price-ascending">Price · Low to high</button>
+                    <button type="button" data-unit-sort="price-descending">Price · High to low</button>
+                    <button type="button" data-unit-sort="year-descending">Year model · Newest to oldest</button>
+                    <button type="button" data-unit-sort="maker">Default maker order</button>
                 </div>
             </form>
             <p id="unitsMessage" class="auth-message" role="status" aria-live="polite"></p>
@@ -292,9 +296,9 @@
                     </label>
                 </div>
                 <div class="unit-editor-actions">
-                    <button type="submit" class="btn btn-success">Save unit</button>
-                    <button type="button" id="cancelUnitEdit" class="request-button">Cancel</button>
-                    <button type="button" id="deleteUnitBtn" class="request-button reject-button" hidden aria-label="Delete unit">🗑 Delete</button>
+                    <button type="submit" class="btn unit-editor-icon-button icon-button" aria-label="Save unit" title="Save unit"><img src="assets/icons/save.png" alt="" aria-hidden="true"></button>
+                    <button type="button" id="cancelUnitEdit" class="request-button unit-editor-icon-button icon-button" aria-label="Cancel" title="Cancel"><img src="assets/icons/cancel.png" alt="" aria-hidden="true"></button>
+                    <button type="button" id="deleteUnitBtn" class="request-button reject-button unit-editor-icon-button icon-button" hidden aria-label="Delete unit" title="Delete unit"><img src="assets/icons/delete.png" alt="" aria-hidden="true"></button>
                 </div>
             </form>
         </section>

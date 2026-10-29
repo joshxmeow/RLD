@@ -1,4 +1,4 @@
-const CACHE_NAME = "rld-estimates-shell-v19";
+const CACHE_NAME = "rld-estimates-shell-v21";
 const APP_BASE = new URL("./", self.registration.scope);
 const APP_SHELL = [
     "",
@@ -11,7 +11,16 @@ const APP_SHELL = [
     "assets/icons/clear.png",
     "assets/icons/print.png",
     "assets/icons/save.png",
-    "assets/icons/icon.svg",
+    "assets/icons/add.png",
+    "assets/icons/dark_mode.png",
+    "assets/icons/light_mode.png",
+    "assets/icons/images.png",
+    "assets/icons/search.png",
+    "assets/icons/sort.png",
+    "assets/icons/edit.png",
+    "assets/icons/delete.png",
+    "assets/icons/cancel.png",
+    "assets/icons/set_date.png",
     "assets/images/header.png",
     "assets/images/signature1.png",
     "assets/images/signature2.png"

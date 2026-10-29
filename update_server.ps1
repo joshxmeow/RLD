@@ -58,8 +58,12 @@ if (Test-NetConnection -ComputerName 127.0.0.1 -Port 8443 -InformationLevel Quie
 
 $managedFiles = @(
     "README.md", "app.py", "cert_setup.py", "configure_storage.bat", "configure_storage.py",
-    "assets/icons/clear.png", "assets/icons/icon.svg", "assets/icons/logout.png",
+    "assets/icons/clear.png", "assets/icons/logout.png",
     "assets/icons/print.png", "assets/icons/rld_logo.png", "assets/icons/save.png",
+    "assets/icons/add.png", "assets/icons/dark_mode.png", "assets/icons/light_mode.png",
+    "assets/icons/images.png", "assets/icons/search.png", "assets/icons/sort.png",
+    "assets/icons/edit.png", "assets/icons/delete.png", "assets/icons/cancel.png",
+    "assets/icons/set_date.png",
     "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
     "data/Units Price List.xlsx", "data/units_price_list.json",
     "index.html", "manifest.webmanifest", "requirements.txt",
@@ -70,8 +74,12 @@ $managedFiles = @(
 )
 $requiredFiles = @(
     "app.py", "cert_setup.py", "configure_storage.py",
-    "assets/icons/clear.png", "assets/icons/icon.svg", "assets/icons/logout.png",
+    "assets/icons/clear.png", "assets/icons/logout.png",
     "assets/icons/print.png", "assets/icons/rld_logo.png", "assets/icons/save.png",
+    "assets/icons/add.png", "assets/icons/dark_mode.png", "assets/icons/light_mode.png",
+    "assets/icons/images.png", "assets/icons/search.png", "assets/icons/sort.png",
+    "assets/icons/edit.png", "assets/icons/delete.png", "assets/icons/cancel.png",
+    "assets/icons/set_date.png",
     "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
     "data/Units Price List.xlsx", "data/units_price_list.json",
     "index.html", "manifest.webmanifest", "requirements.txt",

@@ -1,11 +1,14 @@
+from io import BytesIO
 import tempfile
 import unittest
 import sqlite3
+import zipfile
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
 
 from openpyxl import load_workbook
+from PIL import Image
 
 from app import ADMIN_PASSWORD, ADMIN_USERNAME, create_app, resolve_data_dir
 
@@ -60,6 +63,16 @@ class LocalServerTests(unittest.TestCase):
             "/assets/icons/clear.png",
             "/assets/icons/print.png",
             "/assets/icons/save.png",
+            "/assets/icons/add.png",
+            "/assets/icons/dark_mode.png",
+            "/assets/icons/light_mode.png",
+            "/assets/icons/images.png",
+            "/assets/icons/search.png",
+            "/assets/icons/sort.png",
+            "/assets/icons/edit.png",
+            "/assets/icons/delete.png",
+            "/assets/icons/cancel.png",
+            "/assets/icons/set_date.png",
             "/assets/images/header.png",
             "/assets/images/signature1.png",
             "/assets/images/signature2.png",
@@ -243,6 +256,90 @@ class LocalServerTests(unittest.TestCase):
             29,
         )
 
+    def test_unit_images_are_private_capped_and_downloadable_in_a_zip(self):
+        image_buffer = BytesIO()
+        Image.new("RGB", (2, 2), "blue").save(image_buffer, format="PNG")
+        image_bytes = image_buffer.getvalue()
+        self.assertEqual(
+            self.client.get(
+                "/api/units/example/images", base_url=self.base_url
+            ).status_code,
+            401,
+        )
+        self.assertEqual(self.login().status_code, 200)
+        unit = self.client.post(
+            "/api/units",
+            base_url=self.base_url,
+            json={
+                "maker": "Toyota",
+                "unit": "Photo unit",
+                "transmission": "Automatic",
+                "plateNo": "PHOTO-1",
+                "yearModel": 2024,
+                "fuelType": "Diesel",
+                "sellingPrice": None,
+            },
+        ).json["unit"]
+        upload_response = self.client.post(
+            f"/api/units/{unit['id']}/images",
+            base_url=self.base_url,
+            data={
+                "images": [
+                    (BytesIO(image_bytes), f"photo-{index}.png")
+                    for index in range(20)
+                ]
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(upload_response.status_code, 201)
+        self.assertEqual(len(upload_response.json["images"]), 20)
+        first_image = upload_response.json["images"][0]
+        image_response = self.client.get(first_image["url"], base_url=self.base_url)
+        self.assertEqual(image_response.data, image_bytes)
+        image_response.close()
+        too_many = self.client.post(
+            f"/api/units/{unit['id']}/images",
+            base_url=self.base_url,
+            data={"images": (BytesIO(image_bytes), "extra.png")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(too_many.status_code, 400)
+        invalid = self.client.post(
+            f"/api/units/{unit['id']}/images",
+            base_url=self.base_url,
+            data={"images": (BytesIO(b"not an image"), "invalid.png")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(invalid.status_code, 400)
+        second_image = upload_response.json["images"][1]
+        download = self.client.get(
+            f"/api/units/{unit['id']}/images-download"
+            f"?imageIds={first_image['id']}&imageIds={second_image['id']}",
+            base_url=self.base_url,
+        )
+        self.assertEqual(download.status_code, 200)
+        with zipfile.ZipFile(BytesIO(download.data)) as archive:
+            self.assertEqual(len(archive.namelist()), 2)
+            self.assertEqual(
+                [archive.read(name) for name in archive.namelist()],
+                [image_bytes, image_bytes],
+            )
+        self.assertTrue(
+            (Path(self.temporary_directory.name) / "unit-images").is_dir()
+        )
+        self.assertEqual(
+            self.client.delete(
+                f"/api/units/{unit['id']}", base_url=self.base_url
+            ).status_code,
+            200,
+        )
+        unit_image_directory = (
+            Path(self.temporary_directory.name)
+            / "unit-images"
+            / sha256(unit["id"].encode("utf-8")).hexdigest()
+        )
+        self.assertFalse(unit_image_directory.exists())
+
     def test_existing_unit_database_migrates_color_and_unpriced_support(self):
         database_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
         connection = sqlite3.connect(database_path)
@@ -413,11 +510,16 @@ class LocalServerTests(unittest.TestCase):
                 "updatedAt": "2026-02-03T00:00:00.000Z",
                 "data": {
                     "works": [
-                        {"desc": "first repair", "labor": 100, "parts": 20},
-                        {"desc": "second repair", "labor": 200, "parts": 30},
+                        {"desc": "*parts", "labor": "", "parts": ""},
+                        {"desc": "bolt", "labor": "", "parts": 5000},
+                        {"desc": "*mechanical", "labor": "", "parts": ""},
+                        {"desc": "first repair", "labor": 10000, "parts": 1000},
+                        {"desc": "second repair", "labor": 8000, "parts": 1000},
                     ],
                     "bundleLabor": True,
                     "bundleAllPrices": True,
+                    "totLabor": 18000,
+                    "totParts": 7000,
                 },
             },
         )
@@ -429,10 +531,15 @@ class LocalServerTests(unittest.TestCase):
         )
         bundled_workbook = load_workbook(bundled_dir / "PRIVATE_UNKNOWN VEHICLE_NO PLATE.xlsx")
         bundled_sheet = bundled_workbook["Job Estimate"]
-        self.assertEqual(bundled_sheet["C17"].value, 300)
-        self.assertEqual(bundled_sheet["D17"].value, 50)
-        self.assertIn("C17:C18", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
-        self.assertIn("D17:D18", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
+        self.assertEqual(bundled_sheet["C17"].value, 25000)
+        for row in (17, 18, 20, 21):
+            if row != 17:
+                self.assertIsNone(bundled_sheet[f"C{row}"].value)
+            self.assertIsNone(bundled_sheet[f"D{row}"].value)
+        self.assertIn("C17:D21", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
+        self.assertEqual(bundled_sheet["C17"].alignment.horizontal, "center")
+        self.assertEqual(bundled_sheet["C22"].value, 25000)
+        self.assertIn("C22:D22", {str(merged) for merged in bundled_sheet.merged_cells.ranges})
 
 
 if __name__ == "__main__":

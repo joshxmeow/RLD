@@ -49,9 +49,12 @@ Updating the app files does not normally change the server certificate, so phone
 - A phone must first open the app and sign in successfully while connected to the server. The app shell, account verifier, and estimates are then stored on that device. Do not clear the browser/PWA's site data if unsynced estimates need to be preserved.
 - Estimates save to the device immediately. While online, changes sync automatically on reconnect, app resume, or while the app remains open. The history shows whether each item is synced, syncing, or still waiting.
 - The unit list is cached on each device for offline viewing and editing. Add, edit, delete, or change availability offline; queued changes sync when the server is reachable and the app is signed in. Search across the list, and swipe a unit card from left to right (or tap its availability badge) to toggle availability.
+- Sort the Units list by price (low/high) or year model (newest to oldest) with the sort control.
+- Each unit can store up to 20 JPEG, PNG, or WebP images on the server (maximum 5 MB per image). Image uploads and galleries require a live server connection; select gallery images to download them together as a ZIP file. Unit images are stored below `<chosen-data-folder>\unit-images\`.
 - Jobs start in **Preparing**. Selecting **Quotation only** moves the job directly to History with that label. Use the history menu's **Active** action to return a job to the active list; only the administrator can delete a job from that menu.
 - The bundled Units Price List is imported once during the update. A vehicle without a listed selling price remains in the list with “Price not listed”; add its price when known.
 - On the estimate form, select **Add a red note** to include “NOTE: HIDDEN DAMAGE ARE NOT INCLUDED” below the scope of works and above the totals in print and Excel estimates.
+- Select **Bundle all labor and parts prices into one price** to print one combined price for the full scope and a single combined subtotal.
 - Saving an estimate clears the entry form. Use **Clear entry** to discard the current form, and search estimate history by organization, vehicle, plate, date, or user.
 - Choose the estimate date with the phone or computer's native calendar picker. The estimate displays and prints the date as `MONTH DAY, YEAR`; if left blank, the current local date is used. Previously saved organization/government names, vehicle make/models, job keywords, and insurers on that device are automatically suggested as you fill in those fields.
 - iOS may suspend a closed PWA, so it cannot reliably sync in the background while closed. Reopen the app or bring it to the foreground after reconnecting to Wi-Fi.
@@ -61,6 +64,6 @@ Updating the app files does not normally change the server certificate, so phone
 
 ## Data and backups
 
-Shared accounts, server-side estimates, Excel workbooks, and certificate/session secrets are in the chosen data folder. Back up `<chosen-data-folder>\rld.sqlite3` and `<chosen-data-folder>\estimates\` regularly to protected storage. Keep the `certs` folder private as it contains the CA private key and server key; losing it requires re-trusting a newly generated CA on every phone.
+Shared accounts, server-side estimates, Excel workbooks, unit images, and certificate/session secrets are in the chosen data folder. Back up `<chosen-data-folder>\rld.sqlite3`, `<chosen-data-folder>\estimates\`, and `<chosen-data-folder>\unit-images\` regularly to protected storage. Keep the `certs` folder private as it contains the CA private key and server key; losing it requires re-trusting a newly generated CA on every phone.
 
 The server is intended for a trusted private Wi-Fi network. Do not expose port 8443 to the public internet.
