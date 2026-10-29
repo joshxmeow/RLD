@@ -1,6 +1,13 @@
 # RLD AutoDesk Local Estimate Server
 
-The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates and a cached unit list on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited online or offline; it includes color details and expands AT/MT to Automatic/Manual. The home-page light/dark theme preference is saved on each device. The `rld_logo.png` image is used for the login branding and installed app icon.
+The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates and a cached unit list on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited online or offline; it includes color details and expands AT/MT to Automatic/Manual. The home-page light/dark theme preference is saved on each device. `assets\icons\rld_logo.png` is used for the login branding and installed app icon.
+
+## Project files
+
+- `assets\icons\` contains the app logo, manifest icon, and interface icons.
+- `assets\images\` contains the estimate banner and signature images.
+- `data\` contains the bundled vehicle list files.
+- The app files and Windows launch/update scripts remain in the project root so existing startup shortcuts keep working. Tests are in `tests\`.
 
 ## First-time setup on the Windows server PC
 

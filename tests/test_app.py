@@ -54,7 +54,22 @@ class LocalServerTests(unittest.TestCase):
         public_response = self.client.get("/", base_url=self.base_url)
         self.assertEqual(public_response.status_code, 200)
         public_response.close()
+        for asset_path in (
+            "/assets/icons/rld_logo.png",
+            "/assets/icons/logout.png",
+            "/assets/icons/clear.png",
+            "/assets/icons/print.png",
+            "/assets/icons/save.png",
+            "/assets/images/header.png",
+            "/assets/images/signature1.png",
+            "/assets/images/signature2.png",
+        ):
+            with self.subTest(asset_path=asset_path):
+                response = self.client.get(asset_path, base_url=self.base_url)
+                self.assertEqual(response.status_code, 200)
+                response.close()
         self.assertEqual(self.client.get("/app.py", base_url=self.base_url).status_code, 404)
+        self.assertEqual(self.client.get("/data/units_price_list.json", base_url=self.base_url).status_code, 404)
         self.assertEqual(self.client.get("/instance/rld.sqlite3", base_url=self.base_url).status_code, 404)
 
     def test_login_errors_and_admin_password_change(self):

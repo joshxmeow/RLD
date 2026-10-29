@@ -58,31 +58,45 @@ if (Test-NetConnection -ComputerName 127.0.0.1 -Port 8443 -InformationLevel Quie
 
 $managedFiles = @(
     "README.md", "app.py", "cert_setup.py", "configure_storage.bat", "configure_storage.py",
-    "header.png", "icon.svg", "index.html", "manifest.webmanifest", "requirements.txt",
-    "rld_logo.png",
-    "units_price_list.json",
-    "script.js", "service-worker.js", "signature1.png", "signature2.png", "start_server.bat",
+    "assets/icons/clear.png", "assets/icons/icon.svg", "assets/icons/logout.png",
+    "assets/icons/print.png", "assets/icons/rld_logo.png", "assets/icons/save.png",
+    "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
+    "data/Units Price List.xlsx", "data/units_price_list.json",
+    "index.html", "manifest.webmanifest", "requirements.txt",
+    "script.js", "service-worker.js", "start_server.bat",
     "style.css", "autostart_task.ps1", "install_autostart.bat", "remove_autostart.bat",
     "start_server_hidden.vbs", "update_server.bat", "update_server.ps1",
     "make_update_package.bat", "make_update_package.ps1"
 )
 $requiredFiles = @(
-    "app.py", "cert_setup.py", "configure_storage.py", "header.png", "icon.svg",
-    "rld_logo.png",
-    "index.html", "manifest.webmanifest", "requirements.txt", "units_price_list.json", "script.js",
-    "service-worker.js", "signature1.png", "signature2.png", "start_server.bat", "style.css"
+    "app.py", "cert_setup.py", "configure_storage.py",
+    "assets/icons/clear.png", "assets/icons/icon.svg", "assets/icons/logout.png",
+    "assets/icons/print.png", "assets/icons/rld_logo.png", "assets/icons/save.png",
+    "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
+    "data/Units Price List.xlsx", "data/units_price_list.json",
+    "index.html", "manifest.webmanifest", "requirements.txt",
+    "script.js", "service-worker.js", "start_server.bat", "style.css"
 )
 
 $archive = [System.IO.Compression.ZipFile]::OpenRead($packagePath)
 $archiveFiles = @{}
 try {
     foreach ($entry in $archive.Entries) {
-        $name = $entry.FullName
-        if (-not $name -or $name.Contains("/") -or $name.Contains("\") -or
-            [System.IO.Path]::IsPathRooted($name) -or $name -eq "." -or $name -eq "..") {
-            throw "The update archive contains an unsafe or nested path: $name"
+        $name = $entry.FullName.Replace("\", "/")
+        $isDirectory = $name.EndsWith("/")
+        $normalizedName = $name.TrimEnd("/")
+        $segments = $normalizedName.Split("/")
+        if (-not $normalizedName -or [System.IO.Path]::IsPathRooted($normalizedName) -or
+            ($segments | Where-Object { $_ -in @("", ".", "..") -or $_.Contains(":") })) {
+            throw "The update archive contains an unsafe path: $name"
         }
-        $archiveFiles[$name] = $true
+        if ($isDirectory) {
+            if (-not ($managedFiles | Where-Object { $_.StartsWith("$normalizedName/") })) {
+                throw "The update archive contains an unexpected folder: $name"
+            }
+            continue
+        }
+        $archiveFiles[$normalizedName] = $true
     }
 }
 finally {
@@ -104,7 +118,9 @@ try {
     New-Item -ItemType Directory -Path $stage | Out-Null
     [System.IO.Compression.ZipFile]::ExtractToDirectory($packagePath, $stage)
     foreach ($name in $archiveFiles.Keys) {
-        Copy-Item -LiteralPath (Join-Path $stage $name) -Destination (Join-Path $target $name) -Force
+        $destination = Join-Path $target $name
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $stage $name) -Destination $destination -Force
     }
 
     $pythonPath = Join-Path $target ".venv\Scripts\python.exe"
@@ -141,6 +157,17 @@ try {
     }
     if (-not $serverReady) {
         throw "The update is installed, but the server did not start. Check $(Join-Path $target 'server.log')."
+    }
+
+    $legacyRootFiles = @(
+        "clear.png", "header.png", "icon.svg", "logout.png", "print.png", "rld_logo.png",
+        "save.png", "signature1.png", "signature2.png", "Units Price List.xlsx", "units_price_list.json"
+    )
+    foreach ($name in $legacyRootFiles) {
+        $legacyPath = Join-Path $target $name
+        if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
+            Remove-Item -LiteralPath $legacyPath -Force
+        }
     }
 
     Write-Host "RLD has been updated and the server is running in the background."

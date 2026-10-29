@@ -29,8 +29,10 @@ ADMIN_PASSWORD = "rld2026"
 SERVER_PORT = 8443
 USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]{3,30}$")
 PUBLIC_FILES = {
-    "index.html", "style.css", "script.js", "manifest.webmanifest",
-    "service-worker.js", "rld_logo.png", "header.png", "signature1.png", "signature2.png",
+    "index.html", "style.css", "script.js", "manifest.webmanifest", "service-worker.js",
+    "assets/icons/rld_logo.png", "assets/icons/logout.png", "assets/icons/clear.png",
+    "assets/icons/print.png", "assets/icons/save.png", "assets/icons/icon.svg",
+    "assets/images/header.png", "assets/images/signature1.png", "assets/images/signature2.png",
 }
 
 
@@ -183,7 +185,7 @@ def init_db(database_path):
             (price_list_version,),
         ).fetchone()
         if imported is None:
-            price_list_path = ROOT / "units_price_list.json"
+            price_list_path = ROOT / "data" / "units_price_list.json"
             try:
                 price_list = json.loads(price_list_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as error:
@@ -778,7 +780,7 @@ def save_estimate_workbook(record, data_dir):
     bold = Font(name="Arial", size=9, bold=True)
     normal = Font(name="Arial", size=8, bold=True)
 
-    banner_path = ROOT / "header.png"
+    banner_path = ROOT / "assets" / "images" / "header.png"
     if banner_path.exists():
         banner = ExcelImage(str(banner_path))
         original_width, original_height = banner.width, banner.height
@@ -944,7 +946,7 @@ def save_estimate_workbook(record, data_dir):
         ("signature1.png", 1, "PREPARED BY: BEVERLY BALATBAT"),
         ("signature2.png", 3, "APPROVED BY: ROLDAN DUEÑAS"),
     ):
-        image_path = ROOT / image_name
+        image_path = ROOT / "assets" / "images" / image_name
         if image_path.exists():
             signature = ExcelImage(str(image_path))
             original_width, original_height = signature.width, signature.height
