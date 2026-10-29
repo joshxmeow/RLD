@@ -1,15 +1,19 @@
-const CACHE_NAME = "rld-estimates-shell-v15";
+const CACHE_NAME = "rld-estimates-shell-v18";
 const APP_BASE = new URL("./", self.registration.scope);
 const APP_SHELL = [
     "",
     "index.html",
     "style.css",
-    "script.js",
+    "script.js?update-notice=1",
     "manifest.webmanifest",
     "rld_logo.png",
     "header.png",
     "signature1.png",
-    "signature2.png"
+    "signature2.png",
+    "logout.png",
+    "clear.png",
+    "print.png",
+    "save.png"
 ].map(path => new URL(path, APP_BASE));
 const API_PATH = new URL("api/", APP_BASE).pathname;
 

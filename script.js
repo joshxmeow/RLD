@@ -4,17 +4,22 @@ const ACTIVE_USER_KEY = "rld.activeUser";
 const REMEMBERED_USER_KEY = "rld.rememberedUser";
 const REMEMBERED_CREDENTIAL_KEY = "rld.rememberedCredential";
 const ESTIMATES_KEY = "rld.estimates.v1";
+const UNITS_CACHE_KEY = "rld.units.cache.v1";
+const UNIT_CHANGES_KEY = "rld.units.changes.v1";
 const THEME_KEY = "rld.theme";
 const ADMIN_USERNAME = "rld";
 const UNIT_MAKERS = ["Toyota", "Honda", "Isuzu", "Mitsubishi", "Hyundai", "Ford", "Volkswagen", "Nissan", "Suzuki"];
 let editingEstimateId = null;
 let editingUnitId = null;
 let units = [];
+let unitSyncPromise = null;
 let unitSwipeStart = null;
 let syncQueueRunning = false;
 let serverAuthenticated = false;
 let serverReachable = false;
 let installPromptEvent = null;
+let appServiceWorkerRegistration = null;
+let historyPrintRestoreState = null;
 
 function apiUrl(path) {
     return new URL(path.replace(/^\/+/, ""), document.baseURI);
@@ -138,14 +143,17 @@ function showPage(page) {
     const showAdmin = page === "admin" && isAdmin;
     const showHistory = page === "history";
     const showUnits = page === "units";
-    const activePage = showAdmin ? "admin" : showHistory ? "history" : showUnits ? "units" : "estimate";
-    document.getElementById("estimatePage").hidden = showAdmin || showHistory || showUnits;
+    const showJobs = page === "jobs";
+    const activePage = showAdmin ? "admin" : showHistory ? "history" : showUnits ? "units" : showJobs ? "jobs" : "estimate";
+    document.getElementById("estimatePage").hidden = showAdmin || showHistory || showUnits || showJobs;
     document.getElementById("unitsPage").hidden = !showUnits;
     document.getElementById("adminPage").hidden = !showAdmin;
     document.getElementById("historyPage").hidden = !showHistory;
+    document.getElementById("jobsPage").hidden = !showJobs;
     const navigationPages = {
         estimate: ["showEstimatePage", "estimatePage"],
         units: ["showUnitsPage", "unitsPage"],
+        jobs: ["showJobsPage", "jobsPage"],
         history: ["showHistoryPage", "historyPage"],
         admin: ["showAdminPage", "adminPage"]
     };
@@ -165,6 +173,7 @@ function showPage(page) {
     if (showAdmin) renderAccounts();
     if (showHistory) loadHistory();
     if (showUnits) loadUnits();
+    if (showJobs) renderJobs();
 }
 
 function readEstimates() {
@@ -322,6 +331,7 @@ function deleteUser(username) {
 
 document.getElementById("showEstimatePage").addEventListener("click", () => showPage("estimate"));
 document.getElementById("showUnitsPage").addEventListener("click", () => showPage("units"));
+document.getElementById("showJobsPage").addEventListener("click", () => showPage("jobs"));
 document.getElementById("showHistoryPage").addEventListener("click", () => showPage("history"));
 document.getElementById("showAdminPage").addEventListener("click", () => showPage("admin"));
 
@@ -533,6 +543,7 @@ async function checkServerSession() {
     }
     updateConnectionStatus();
     if (!document.getElementById("historyPage").hidden) renderHistory();
+    if (!document.getElementById("jobsPage").hidden) renderJobs();
 }
 
 async function syncPendingEstimates() {
@@ -566,13 +577,21 @@ async function syncPendingEstimates() {
             if (local.syncStatus === "error" && !local.deleted) continue;
             local.syncStatus = "syncing";
             writeEstimates(localEstimates);
+            const submittedUpdatedAt = local.updatedAt;
             try {
                 const saved = await apiRequest(`/api/estimates/${encodeURIComponent(local.id)}`, {
                     method: "PUT",
                     body: JSON.stringify(local)
                 });
                 const index = localEstimates.findIndex(item => item.id === local.id);
-                localEstimates[index] = { ...saved.estimate, syncStatus: "synced" };
+                const latest = readEstimates().find(item => item.id === local.id);
+                if (latest && latest.updatedAt !== submittedUpdatedAt) {
+                    latest.syncStatus = "pending";
+                    delete latest.syncError;
+                    localEstimates[index] = latest;
+                } else {
+                    localEstimates[index] = { ...saved.estimate, syncStatus: "synced" };
+                }
             } catch (error) {
                 local.syncStatus = error.status === 401 || !error.status ? "offline" : "error";
                 local.syncError = error.message;
@@ -588,6 +607,7 @@ async function syncPendingEstimates() {
         }
         writeEstimates(localEstimates);
         if (!document.getElementById("historyPage").hidden) renderHistory();
+        if (!document.getElementById("jobsPage").hidden) renderJobs();
     } catch (error) {
         if (error.status === 401) serverAuthenticated = false;
         if (!error.status) serverReachable = false;
@@ -596,6 +616,10 @@ async function syncPendingEstimates() {
     } finally {
         syncQueueRunning = false;
         updateConnectionStatus();
+        if (navigator.onLine && serverAuthenticated &&
+            readEstimates().some(estimate => estimate.syncStatus === "pending")) {
+            syncPendingEstimates();
+        }
     }
 }
 
@@ -724,18 +748,121 @@ function renderUnits() {
     });
 }
 
+function readUnitChanges() {
+    const saved = localStorage.getItem(UNIT_CHANGES_KEY);
+    if (saved === null) return [];
+    const changes = JSON.parse(saved);
+    if (!Array.isArray(changes)) throw new Error("Saved unit changes are invalid.");
+    return changes;
+}
+
+function writeUnitChanges(changes) {
+    localStorage.setItem(UNIT_CHANGES_KEY, JSON.stringify(changes));
+}
+
+function writeUnitCache() {
+    localStorage.setItem(UNITS_CACHE_KEY, JSON.stringify(units));
+}
+
+function applyUnitChanges(serverUnits, changes) {
+    let result = serverUnits.map(unit => ({ ...unit }));
+    changes.forEach(change => {
+        if (change.type === "create") {
+            result.push({ ...change.data, id: change.localId });
+        } else if (change.type === "update") {
+            result = result.map(unit => unit.id === change.id ? { ...change.data, id: unit.id } : unit);
+        } else if (change.type === "delete") {
+            result = result.filter(unit => unit.id !== change.id);
+        }
+    });
+    return result;
+}
+
+function queueUnitChange(change) {
+    const changes = readUnitChanges();
+    changes.push({
+        ...change,
+        operationId: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    });
+    writeUnitChanges(changes);
+    units = applyUnitChanges(units, [change]);
+    writeUnitCache();
+    renderUnits();
+}
+
+function syncPendingUnitChanges() {
+    if (unitSyncPromise) return unitSyncPromise;
+    unitSyncPromise = processPendingUnitChanges().finally(() => {
+        unitSyncPromise = null;
+    });
+    return unitSyncPromise;
+}
+
+async function processPendingUnitChanges() {
+    if (!navigator.onLine) return false;
+    while (true) {
+        const changes = readUnitChanges();
+        if (!changes.length) return true;
+        const change = changes[0];
+        if (change.type === "create") {
+            const result = await apiRequest("/api/units", {
+                method: "POST",
+                body: JSON.stringify(change.data)
+            });
+            units = units.map(unit => unit.id === change.localId ? result.unit : unit);
+            const remaining = readUnitChanges().slice(1).map(next =>
+                next.id === change.localId ? { ...next, id: result.unit.id } : next
+            );
+            writeUnitChanges(remaining);
+        } else if (change.type === "update") {
+            const result = await apiRequest(`/api/units/${encodeURIComponent(change.id)}`, {
+                method: "PUT",
+                body: JSON.stringify(change.data)
+            });
+            units = units.map(unit => unit.id === change.id ? result.unit : unit);
+            writeUnitChanges(readUnitChanges().slice(1));
+        } else if (change.type === "delete") {
+            await apiRequest(`/api/units/${encodeURIComponent(change.id)}`, { method: "DELETE" });
+            units = units.filter(unit => unit.id !== change.id);
+            writeUnitChanges(readUnitChanges().slice(1));
+        } else {
+            throw new Error("A saved unit change has an unknown operation.");
+        }
+        writeUnitCache();
+    }
+}
+
 async function loadUnits() {
     const message = document.getElementById("unitsMessage");
     try {
-        const result = await apiRequest("/api/units");
-        units = result.units;
-        message.textContent = "";
-        renderUnits();
+        const cached = JSON.parse(localStorage.getItem(UNITS_CACHE_KEY) || "[]");
+        if (!Array.isArray(cached)) throw new Error("Saved unit data is invalid.");
+        units = cached;
     } catch (error) {
+        message.textContent = `Could not load saved units: ${error.message}`;
         units = [];
-        message.textContent = `Could not load the unit price list: ${error.message}`;
+    }
+    renderUnits();
+    try {
+        const result = await apiRequest("/api/units");
+        units = applyUnitChanges(result.units, readUnitChanges());
+        writeUnitCache();
+        renderUnits();
+        message.textContent = "";
+    } catch (error) {
+        message.textContent = units.length
+            ? `Showing units saved on this device. Could not refresh the shared list: ${error.message}`
+            : `Could not load the unit price list: ${error.message}`;
         if (error.status === 401) serverAuthenticated = false;
         renderUnits();
+        return;
+    }
+    try {
+        const synced = await syncPendingUnitChanges();
+        if (!synced) message.textContent = "Showing the shared list. Saved unit changes are waiting for a connection.";
+    } catch (error) {
+        if (error.status === 401) serverAuthenticated = false;
+        message.textContent = `Could not sync saved unit changes: ${error.message}`;
     }
 }
 
@@ -787,21 +914,30 @@ async function saveUnit(event) {
     const submit = document.getElementById("unitForm").querySelector('[type="submit"]');
     submit.disabled = true;
     try {
-        const result = await apiRequest(
-            editingUnitId ? `/api/units/${encodeURIComponent(editingUnitId)}` : "/api/units",
-            { method: editingUnitId ? "PUT" : "POST", body: JSON.stringify(unitFormData()) }
-        );
+        const data = unitFormData();
+        let change;
         if (editingUnitId) {
-            units = units.map(unit => unit.id === editingUnitId ? result.unit : unit);
+            change = { type: "update", id: editingUnitId, data };
         } else {
-            units.push(result.unit);
+            change = {
+                type: "create",
+                localId: crypto.randomUUID ? crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                data
+            };
         }
+        queueUnitChange(change);
         closeUnitEditor();
-        renderUnits();
-        message.textContent = `${result.unit.unit} was saved.`;
+        try {
+            const synced = await syncPendingUnitChanges();
+            message.textContent = synced
+                ? `${data.unit} was saved and synced.`
+                : `${data.unit} was saved on this device. Sync is waiting for a connection.`;
+        } catch (error) {
+            if (error.status === 401) serverAuthenticated = false;
+            message.textContent = `${data.unit} was saved on this device. Sync is pending: ${error.message}`;
+        }
     } catch (error) {
-        message.textContent = `Could not save the unit: ${error.message}`;
-        if (error.status === 401) serverAuthenticated = false;
+        message.textContent = `Could not save the unit on this device: ${error.message}`;
     } finally {
         submit.disabled = false;
     }
@@ -811,16 +947,18 @@ async function toggleUnitAvailability(unit) {
     const message = document.getElementById("unitsMessage");
     const updatedUnit = { ...unit, available: !unit.available };
     try {
-        const result = await apiRequest(`/api/units/${encodeURIComponent(unit.id)}`, {
-            method: "PUT",
-            body: JSON.stringify(updatedUnit)
-        });
-        units = units.map(item => item.id === unit.id ? result.unit : item);
-        renderUnits();
-        message.textContent = `${unit.unit} marked ${result.unit.available ? "available" : "unavailable"}.`;
+        queueUnitChange({ type: "update", id: unit.id, data: updatedUnit });
+        try {
+            const synced = await syncPendingUnitChanges();
+            message.textContent = synced
+                ? `${unit.unit} marked ${updatedUnit.available ? "available" : "unavailable"} and synced.`
+                : `${unit.unit} marked ${updatedUnit.available ? "available" : "unavailable"} on this device. Sync is waiting for a connection.`;
+        } catch (error) {
+            if (error.status === 401) serverAuthenticated = false;
+            message.textContent = `${unit.unit} marked ${updatedUnit.available ? "available" : "unavailable"} on this device. Sync is pending: ${error.message}`;
+        }
     } catch (error) {
-        message.textContent = `Could not update availability: ${error.message}`;
-        if (error.status === 401) serverAuthenticated = false;
+        message.textContent = `Could not update availability on this device: ${error.message}`;
     }
 }
 
@@ -829,14 +967,19 @@ async function deleteUnit() {
     if (!unit || !window.confirm(`Delete "${unit.unit}" from the unit price list?`)) return;
     const message = document.getElementById("unitsMessage");
     try {
-        await apiRequest(`/api/units/${encodeURIComponent(unit.id)}`, { method: "DELETE" });
-        units = units.filter(item => item.id !== unit.id);
+        queueUnitChange({ type: "delete", id: unit.id });
         closeUnitEditor();
-        renderUnits();
-        message.textContent = `${unit.unit} was deleted.`;
+        try {
+            const synced = await syncPendingUnitChanges();
+            message.textContent = synced
+                ? `${unit.unit} was deleted and synced.`
+                : `${unit.unit} was deleted on this device. Sync is waiting for a connection.`;
+        } catch (error) {
+            if (error.status === 401) serverAuthenticated = false;
+            message.textContent = `${unit.unit} was deleted on this device. Sync is pending: ${error.message}`;
+        }
     } catch (error) {
-        message.textContent = `Could not delete the unit: ${error.message}`;
-        if (error.status === 401) serverAuthenticated = false;
+        message.textContent = `Could not delete the unit on this device: ${error.message}`;
     }
 }
 
@@ -882,7 +1025,9 @@ function renderHistory() {
                     getHistoryTitle(estimate),
                     estimate.data.date,
                     formatEstimateDate(estimate.data.date),
-                    estimate.username
+                    estimate.username,
+                    estimate.data.clientName,
+                    estimate.data.insurance
                 ].join(" ").toLocaleUpperCase();
                 return searchableText.includes(searchTerm);
             });
@@ -894,7 +1039,7 @@ function renderHistory() {
         list.textContent = searchTerm ? "No estimates match your search." : "No saved estimates yet.";
         return;
     }
-    estimates.forEach(estimate => {
+    estimates.forEach((estimate, index) => {
         const row = document.createElement("div");
         row.className = "history-row";
         const details = document.createElement("div");
@@ -903,13 +1048,20 @@ function renderHistory() {
         title.textContent = getHistoryTitle(estimate);
         const meta = document.createElement("div");
         meta.className = "history-meta";
-        meta.textContent = `${formatEstimateDate(estimate.data.date) || "No date"} · ${estimate.username || "Unknown user"}`;
+        meta.textContent = [
+            `${formatEstimateDate(estimate.data.date) || "No date"} · ${estimate.username || "Unknown user"}`,
+            `Owner: ${estimate.data.clientName || "Not specified"}`,
+            `Insurance: ${estimate.data.insurance || "Not specified"}`
+        ].join(" · ");
         details.append(title, meta);
         const status = document.createElement("span");
         const [label, className] = getStatusLabel(estimate);
         status.className = `cloud-status ${className}`;
         status.textContent = label;
-        row.append(details, status);
+        const statusArea = document.createElement("div");
+        statusArea.className = "history-status-area";
+        statusArea.appendChild(status);
+        row.append(details, statusArea);
         if (estimate.syncStatus === "error") {
             const retry = document.createElement("button");
             retry.type = "button";
@@ -919,24 +1071,60 @@ function renderHistory() {
                 updateHistoryStatus(estimate.id, estimate.deleted ? "offline-delete" : "pending");
                 syncPendingEstimates();
             });
-            row.appendChild(retry);
+            statusArea.appendChild(retry);
         }
         if (estimate.deleted) {
             list.appendChild(row);
             return;
         }
+        const actions = document.createElement("div");
+        actions.className = "history-actions";
+        const print = document.createElement("button");
+        print.type = "button";
+        print.className = "request-button history-action";
+        print.textContent = "Print";
+        print.addEventListener("click", () => printHistoryEstimate(estimate));
+        actions.appendChild(print);
+
+        const menu = document.createElement("div");
+        menu.className = "history-menu";
+        const menuToggle = document.createElement("button");
+        menuToggle.type = "button";
+        menuToggle.className = "request-button history-menu-toggle";
+        menuToggle.textContent = "⋮";
+        menuToggle.setAttribute("aria-label", `More actions for ${getHistoryTitle(estimate)}`);
+        menuToggle.setAttribute("aria-expanded", "false");
+        const menuItems = document.createElement("div");
+        menuItems.className = "history-menu-items";
+        menuItems.id = `history-menu-${index}`;
+        menuItems.hidden = true;
+        menuToggle.setAttribute("aria-controls", menuItems.id);
+        menuToggle.addEventListener("click", () => {
+            const isExpanded = menuToggle.getAttribute("aria-expanded") === "true";
+            document.querySelectorAll(".history-menu-items").forEach(items => {
+                items.hidden = true;
+                items.previousElementSibling.setAttribute("aria-expanded", "false");
+            });
+            menuItems.hidden = isExpanded;
+            menuToggle.setAttribute("aria-expanded", String(!isExpanded));
+        });
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "request-button history-action";
         edit.textContent = "Edit";
         edit.addEventListener("click", () => editEstimate(estimate));
-        row.appendChild(edit);
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "request-button reject-button history-action";
-        remove.textContent = "Delete";
-        remove.addEventListener("click", () => deleteEstimate(estimate));
-        row.appendChild(remove);
+        menuItems.appendChild(edit);
+        if (isAdminSession()) {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "request-button reject-button history-action";
+            remove.textContent = "Delete";
+            remove.addEventListener("click", () => deleteEstimate(estimate));
+            menuItems.appendChild(remove);
+        }
+        menu.append(menuToggle, menuItems);
+        actions.appendChild(menu);
+        row.appendChild(actions);
         list.appendChild(row);
     });
 }
@@ -947,9 +1135,218 @@ function loadHistory() {
 }
 
 document.getElementById("historySearch").addEventListener("input", renderHistory);
+document.addEventListener("click", event => {
+    if (event.target.closest(".history-menu, .job-history-menu")) return;
+    document.querySelectorAll(".history-menu-items").forEach(items => {
+        items.hidden = true;
+        items.previousElementSibling.setAttribute("aria-expanded", "false");
+    });
+    document.querySelectorAll(".job-history-menu-items").forEach(items => {
+        items.hidden = true;
+        items.previousElementSibling.setAttribute("aria-expanded", "false");
+    });
+});
+document.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll(".history-menu-items:not([hidden]), .job-history-menu-items:not([hidden])").forEach(items => {
+        items.hidden = true;
+        items.previousElementSibling.setAttribute("aria-expanded", "false");
+        items.previousElementSibling.focus();
+    });
+});
+
+const JOB_STATUSES = {
+    preparing: "Preparing",
+    tinsmith: "Tinsmith dept.",
+    mechanical: "Mechanical dept.",
+    detailing: "Detailing dept.",
+    quotationOnly: "Quotation only",
+    finished: "Finished"
+};
+
+function renderJobs() {
+    const activeList = document.getElementById("activeJobsList");
+    const historyList = document.getElementById("jobsHistoryList");
+    const searchTerm = document.getElementById("jobsSearch").value.trim().toLocaleLowerCase();
+    activeList.replaceChildren();
+    historyList.replaceChildren();
+
+    let estimates;
+    try {
+        estimates = readEstimates().filter(estimate => !estimate.deleted);
+    } catch (error) {
+        activeList.textContent = `Could not load jobs: ${error.message}`;
+        return;
+    }
+
+    const matchesSearch = estimate => {
+        const data = estimate.data || {};
+        return [data.makeModel, data.color, data.clientName, data.contact, data.plateNo]
+            .join(" ").toLocaleLowerCase().includes(searchTerm);
+    };
+    const activeJobs = estimates.filter(estimate =>
+        !estimate.data.pickedUpAt && estimate.data.jobStatus !== "quotationOnly" && matchesSearch(estimate)
+    );
+    const historyJobs = estimates.filter(estimate =>
+        (estimate.data.pickedUpAt || estimate.data.jobStatus === "quotationOnly") && matchesSearch(estimate)
+    ).sort((a, b) =>
+        new Date(b.data.pickedUpAt || b.data.quotationOnlyAt || b.updatedAt || b.savedAt) -
+        new Date(a.data.pickedUpAt || a.data.quotationOnlyAt || a.updatedAt || a.savedAt)
+    );
+
+    if (!activeJobs.length) {
+        activeList.textContent = searchTerm ? "No active jobs match your search." : "No active jobs yet. Save an estimate to add a job.";
+    }
+    activeJobs.forEach(estimate => activeList.appendChild(createJobCard(estimate, false)));
+
+    if (!historyJobs.length) {
+        historyList.textContent = searchTerm ? "No jobs in history match your search." : "No jobs in history yet.";
+    }
+    historyJobs.forEach(estimate => historyList.appendChild(createJobCard(estimate, true)));
+}
+
+function createJobCard(estimate, isHistory) {
+    const data = estimate.data || {};
+    const status = JOB_STATUSES[data.jobStatus] ? data.jobStatus : "preparing";
+    const card = document.createElement("article");
+    card.className = "job-card";
+
+    const heading = document.createElement("div");
+    heading.className = "job-card-heading";
+    const title = document.createElement("h3");
+    title.textContent = [data.makeModel, data.color].filter(Boolean).join(" · ") || "Vehicle details not provided";
+    const statusLabel = document.createElement("span");
+    statusLabel.className = `job-status-label job-status-${status}`;
+    statusLabel.textContent = isHistory
+        ? (status === "quotationOnly" ? "Quotation only" : "Picked up")
+        : JOB_STATUSES[status];
+    heading.append(title, statusLabel);
+
+    const details = document.createElement("dl");
+    details.className = "job-details";
+    [["Client", data.clientName], ["Client number", data.contact], ["Plate no.", data.plateNo]].forEach(([label, value]) => {
+        const item = document.createElement("div");
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const description = document.createElement("dd");
+        description.textContent = value || "Not provided";
+        item.append(term, description);
+        details.appendChild(item);
+    });
+
+    const footer = document.createElement("div");
+    footer.className = "job-card-footer";
+    if (isHistory) {
+        const historyDate = document.createElement("span");
+        historyDate.className = "job-picked-up-date";
+        const historyTimestamp = data.pickedUpAt || data.quotationOnlyAt;
+        historyDate.textContent = data.jobStatus === "quotationOnly"
+            ? `Quotation only · ${new Date(historyTimestamp || estimate.updatedAt || estimate.savedAt).toLocaleDateString()}`
+            : `Picked up ${new Date(historyTimestamp).toLocaleDateString()}`;
+        footer.appendChild(historyDate);
+        const menu = document.createElement("div");
+        menu.className = "job-history-menu";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "request-button job-history-menu-toggle";
+        toggle.textContent = "⋮";
+        toggle.setAttribute("aria-label", `More actions for ${data.makeModel || "vehicle"} in history`);
+        toggle.setAttribute("aria-expanded", "false");
+        const menuItems = document.createElement("div");
+        menuItems.className = "job-history-menu-items";
+        menuItems.hidden = true;
+        toggle.setAttribute("aria-controls", `job-history-menu-${estimate.id}`);
+        menuItems.id = `job-history-menu-${estimate.id}`;
+        toggle.addEventListener("click", () => {
+            const isExpanded = toggle.getAttribute("aria-expanded") === "true";
+            document.querySelectorAll(".job-history-menu-items").forEach(items => {
+                items.hidden = true;
+                items.previousElementSibling.setAttribute("aria-expanded", "false");
+            });
+            menuItems.hidden = isExpanded;
+            toggle.setAttribute("aria-expanded", String(!isExpanded));
+        });
+        const activate = document.createElement("button");
+        activate.type = "button";
+        activate.className = "request-button history-action";
+        activate.textContent = "Active";
+        activate.addEventListener("click", () => updateJob(estimate.id, {
+            jobStatus: "preparing",
+            pickedUpAt: null,
+            quotationOnlyAt: null
+        }));
+        menuItems.appendChild(activate);
+        if (isAdminSession()) {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "request-button reject-button history-action";
+            remove.textContent = "Delete";
+            remove.addEventListener("click", () => deleteEstimate(estimate));
+            menuItems.appendChild(remove);
+        }
+        menu.append(toggle, menuItems);
+        footer.appendChild(menu);
+    } else {
+        const statusSelect = document.createElement("select");
+        statusSelect.className = "job-status-select";
+        statusSelect.setAttribute("aria-label", `Job status for ${data.makeModel || "vehicle"}`);
+        Object.entries(JOB_STATUSES).forEach(([value, label]) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            statusSelect.appendChild(option);
+        });
+        statusSelect.value = status;
+        statusSelect.addEventListener("change", () => updateJob(estimate.id, { jobStatus: statusSelect.value }));
+        footer.appendChild(statusSelect);
+        if (status === "finished") {
+            const pickupButton = document.createElement("button");
+            pickupButton.type = "button";
+            pickupButton.className = "request-button approve-button";
+            pickupButton.textContent = "Mark picked up";
+            pickupButton.addEventListener("click", () => {
+                updateJob(estimate.id, { pickedUpAt: new Date().toISOString() });
+            });
+            footer.appendChild(pickupButton);
+        }
+    }
+    card.append(heading, details, footer);
+    return card;
+}
+
+function updateJob(estimateId, changes) {
+    try {
+        const estimates = readEstimates();
+        const estimate = estimates.find(item => item.id === estimateId);
+        if (!estimate) return;
+        estimate.data = { ...estimate.data, ...changes };
+        if (changes.jobStatus === "quotationOnly") {
+            estimate.data.pickedUpAt = null;
+            estimate.data.quotationOnlyAt = new Date().toISOString();
+        }
+        estimate.updatedAt = new Date().toISOString();
+        estimate.syncStatus = "pending";
+        delete estimate.syncError;
+        writeEstimates(estimates);
+        renderJobs();
+        syncPendingEstimates();
+    } catch (error) {
+        document.getElementById("jobsMessage").textContent = `Could not update this job: ${error.message}`;
+    }
+}
+
+document.getElementById("jobsSearch").addEventListener("input", renderJobs);
 
 function editEstimate(estimate) {
-    const data = estimate.data;
+    populateEstimateForm(estimate.data || {});
+    editingEstimateId = estimate.id;
+    document.getElementById("saveBtn").setAttribute("aria-label", "Update estimate");
+    document.getElementById("saveBtn").title = "Update estimate";
+    document.getElementById("historyMessage").textContent = `Editing ${getHistoryTitle(estimate)}.`;
+    showPage("estimate");
+}
+
+function populateEstimateForm(data) {
     ["date", "orgPrefix", "clientName", "address", "contact", "makeModel", "plateNo", "chassisNo", "engineNo", "color", "insurance", "fileSuffix", "downpayment"].forEach(id => {
         const value = data[id];
         document.getElementById(id).value = value === undefined || value === null ? "" : value;
@@ -980,10 +1377,44 @@ function editEstimate(estimate) {
     addRow();
     updateWorkNumbers();
     calc();
-    editingEstimateId = estimate.id;
-    document.getElementById("saveBtn").textContent = "UPDATE";
-    document.getElementById("historyMessage").textContent = `Editing ${getHistoryTitle(estimate)}.`;
-    showPage("estimate");
+}
+
+function printHistoryEstimate(estimate) {
+    const form = document.getElementById("estimateForm");
+    const worksBody = document.getElementById("worksBody");
+    historyPrintRestoreState = {
+        controls: Array.from(form.querySelectorAll("input, select, textarea")).map(element => ({
+            element,
+            value: element.value,
+            checked: element.checked
+        })),
+        workRows: Array.from(worksBody.childNodes),
+        editingEstimateId,
+        saveButtonLabel: document.getElementById("saveBtn").getAttribute("aria-label"),
+        saveButtonTitle: document.getElementById("saveBtn").title,
+        estimateMessage: document.getElementById("estimateMessage").textContent,
+        dateDisplay: document.getElementById("dateDisplay").textContent
+    };
+    populateEstimateForm(estimate.data || {});
+    printEstimate();
+}
+
+function restoreAfterHistoryPrint() {
+    cleanupPrintLayout();
+    if (!historyPrintRestoreState) return;
+    const state = historyPrintRestoreState;
+    historyPrintRestoreState = null;
+    document.getElementById("worksBody").replaceChildren(...state.workRows);
+    state.controls.forEach(({ element, value, checked }) => {
+        element.value = value;
+        element.checked = checked;
+    });
+    editingEstimateId = state.editingEstimateId;
+    document.getElementById("saveBtn").setAttribute("aria-label", state.saveButtonLabel);
+    document.getElementById("saveBtn").title = state.saveButtonTitle;
+    document.getElementById("estimateMessage").textContent = state.estimateMessage;
+    document.getElementById("dateDisplay").textContent = state.dateDisplay;
+    updateHiddenDamageNote();
 }
 
 function getLocalDateString(date = new Date()) {
@@ -1030,6 +1461,7 @@ function updateHiddenDamageNote() {
 document.getElementById("noteHiddenDamage").addEventListener("change", updateHiddenDamageNote);
 
 function deleteEstimate(estimate) {
+    if (!isAdminSession()) return;
     if (!window.confirm(`Delete "${getHistoryTitle(estimate)}" from history and the local server?`)) return;
     try {
         const estimates = readEstimates();
@@ -1048,6 +1480,25 @@ function deleteEstimate(estimate) {
 
 window.addEventListener("online", () => {
     checkServerSession();
+    let hasPendingChanges;
+    try {
+        hasPendingChanges = readUnitChanges().length > 0;
+    } catch (error) {
+        if (!document.getElementById("unitsPage").hidden) {
+            document.getElementById("unitsMessage").textContent = `Could not read saved unit changes: ${error.message}`;
+        }
+        return;
+    }
+    if (!hasPendingChanges) return;
+    syncPendingUnitChanges().then(() => {
+        if (!document.getElementById("unitsPage").hidden) {
+            document.getElementById("unitsMessage").textContent = "Saved unit changes are synced.";
+        }
+    }).catch(error => {
+        if (!document.getElementById("unitsPage").hidden) {
+            document.getElementById("unitsMessage").textContent = `Could not sync saved unit changes: ${error.message}`;
+        }
+    });
 });
 window.addEventListener("offline", () => {
     serverReachable = false;
@@ -1112,8 +1563,37 @@ document.getElementById("installAppBtn").addEventListener("click", async () => {
     }
 });
 
+function estimateHasUnsavedChanges() {
+    const form = document.getElementById("estimateForm");
+    const hasTextChanges = Array.from(form.querySelectorAll('input:not([type="checkbox"]):not([readonly])'))
+        .some(input => input.id !== "date" && input.value.trim() !== "");
+    const hasCheckboxChanges = Array.from(form.querySelectorAll('input[type="checkbox"]'))
+        .some(input => input.checked !== input.defaultChecked);
+    return hasTextChanges || hasCheckboxChanges;
+}
+
+document.getElementById("applyAppUpdateBtn").addEventListener("click", () => {
+    if (estimateHasUnsavedChanges() &&
+        !window.confirm("Refreshing now will discard unsaved estimate changes. Refresh anyway?")) {
+        return;
+    }
+    window.location.reload();
+});
+
+function checkForAppUpdate() {
+    if (!appServiceWorkerRegistration || document.hidden) return;
+    appServiceWorkerRegistration.update().catch(() => {});
+}
+
 if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" }).catch(error => {
+    let hasExistingController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (hasExistingController) document.getElementById("appUpdateNotice").hidden = false;
+        hasExistingController = true;
+    });
+    navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" }).then(registration => {
+        appServiceWorkerRegistration = registration;
+    }).catch(error => {
         const message = `Offline setup failed: ${error.message}. Check that this phone trusts the RLD server certificate, then reload the app.`;
         if (appContainer.hidden) setAuthMessage(message);
         else {
@@ -1123,6 +1603,7 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
         }
     });
 }
+window.setInterval(checkForAppUpdate, 30 * 60 * 1000);
 
 if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true) {
     document.getElementById("installAppBtn").hidden = true;
@@ -1133,7 +1614,10 @@ window.addEventListener("appinstalled", () => {
 });
 window.setInterval(checkServerSession, 15000);
 document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) checkServerSession();
+    if (!document.hidden) {
+        checkServerSession();
+        checkForAppUpdate();
+    }
 });
 
 const learnedRepairs = [
@@ -1374,360 +1858,12 @@ function cleanupPrintLayout() {
     document.querySelectorAll('.print-merged-source').forEach(cell => cell.classList.remove('print-merged-source'));
 }
 
-window.addEventListener('afterprint', cleanupPrintLayout);
+window.addEventListener('afterprint', restoreAfterHistoryPrint);
 document.getElementById("printBtn").addEventListener("click", printEstimate);
-document.getElementById("saveImageBtn").addEventListener("click", saveEstimateImage);
 
 function printEstimate() {
     ensureEstimateDate();
     window.print();
-}
-
-function getEstimateImage(selector) {
-    const image = document.querySelector(selector);
-    if (!image || !image.complete || !image.naturalWidth) {
-        throw new Error(`Could not load ${image && image.alt || "an estimate image"}. Try again in a moment.`);
-    }
-    return image;
-}
-
-function wrapCanvasText(context, value, maxWidth) {
-    const lines = [];
-    String(value || "").split(/\s+/).forEach(word => {
-        if (!word) return;
-        const current = lines[lines.length - 1];
-        const candidate = current ? `${current} ${word}` : word;
-        if (current && context.measureText(candidate).width > maxWidth) lines.push(word);
-        else if (current) lines[lines.length - 1] = candidate;
-        else lines.push(word);
-    });
-    return lines.length ? lines : [""];
-}
-
-function getPrintableWorkRows(data) {
-    const output = [];
-    let section = [];
-    const flushSection = () => {
-        if (section.length === 0) return;
-        if (data.bundleAllPrices) {
-            const laborTotal = section.reduce((sum, work) => sum + work.labor, 0);
-            const partsTotal = section.reduce((sum, work) => sum + work.parts, 0);
-            section = section.map((work, index) => ({
-                ...work,
-                labor: index === 0 ? laborTotal : 0,
-                parts: index === 0 ? partsTotal : 0
-            }));
-        } else if (data.bundleLabor && section.filter(work => work.labor !== 0).length === 1) {
-            const laborTotal = section.reduce((sum, work) => sum + work.labor, 0);
-            let merged = false;
-            section = section.map(work => {
-                if (work.labor === 0) return work;
-                const next = { ...work, labor: merged ? 0 : laborTotal };
-                merged = true;
-                return next;
-            });
-        }
-        output.push(...section);
-        section = [];
-    };
-
-    data.works.forEach(work => {
-        const description = String(work.desc || "").trim();
-        const row = {
-            desc: description,
-            labor: Number(work.labor) || 0,
-            parts: Number(work.parts) || 0
-        };
-        if (description.startsWith("*")) {
-            flushSection();
-            output.push(row);
-        } else {
-            section.push(row);
-        }
-    });
-    flushSection();
-    return output;
-}
-
-function buildEstimateImage() {
-    ensureEstimateDate();
-    const data = collectEstimateData();
-    const banner = getEstimateImage(".print-banner");
-    const preparedSignature = getEstimateImage(".sig-block:first-child .sig-image");
-    const approvedSignature = getEstimateImage(".sig-block:last-child .sig-image");
-    const pixelRatio = 2;
-    const pageWidth = 850;
-    const margin = 30;
-    const contentWidth = pageWidth - margin * 2;
-    const canvas = document.createElement("canvas");
-    canvas.width = pageWidth * pixelRatio;
-    canvas.height = 2200 * pixelRatio;
-    let context = canvas.getContext("2d");
-    if (!context) throw new Error("Image export is not supported by this browser.");
-    context.scale(pixelRatio, pixelRatio);
-    context.fillStyle = "#fff";
-    context.fillRect(0, 0, pageWidth, 2200);
-    context.fillStyle = "#111";
-    context.strokeStyle = "#111";
-    context.textBaseline = "top";
-    let y = margin;
-
-    const drawCenteredImage = (image, maxWidth, maxHeight) => {
-        const scale = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1);
-        const width = image.naturalWidth * scale;
-        const height = image.naturalHeight * scale;
-        context.drawImage(image, (pageWidth - width) / 2, y, width, height);
-        y += height;
-    };
-    const drawCenteredText = (text, font, lineHeight) => {
-        context.font = font;
-        context.textAlign = "center";
-        const lines = wrapCanvasText(context, text, contentWidth);
-        lines.forEach(line => {
-            context.fillText(line, pageWidth / 2, y);
-            y += lineHeight;
-        });
-    };
-    const drawCellText = (text, x, top, width, font, lineHeight, padding = 6) => {
-        context.font = font;
-        context.textAlign = "left";
-        const lines = wrapCanvasText(context, text, width - padding * 2);
-        lines.forEach((line, index) => {
-            context.fillText(line, x + padding, top + padding + index * lineHeight);
-        });
-        return Math.max(28, lines.length * lineHeight + padding * 2);
-    };
-    const drawRule = (x1, y1, x2, y2, color = "#222") => {
-        context.strokeStyle = color;
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(x1, y1);
-        context.lineTo(x2, y2);
-        context.stroke();
-    };
-
-    drawCenteredImage(banner, contentWidth, 95);
-    y += 3;
-    drawRule(margin, y, pageWidth - margin, y, "#e1b400");
-    y += 8;
-    drawCenteredText("RLD AUTOWORX AND TOWING SERVICES", "bold 13px Arial", 17);
-    [
-        "Brgy. Buli, Taal, Batangas",
-        "Contact No: 09296462336/09267433265/(043)321-8477",
-        "Email: rldcarpaintingservices@yahoo.com",
-        "TIN NO: 287-920-998-000"
-    ].forEach(line => drawCenteredText(line, "bold 9px Arial", 12));
-    y += 8;
-
-    context.font = "bold 14px Arial";
-    context.textAlign = "left";
-    context.fillText("JOB ESTIMATE", margin, y);
-    context.textAlign = "right";
-    context.font = "bold 11px Arial";
-    context.fillText(`DATE: ${formatEstimateDate(data.date)}`, pageWidth - margin, y + 1);
-    y += 23;
-
-    const columnWidths = [contentWidth * 0.45, contentWidth * 0.27, contentWidth * 0.28];
-    const tableX = margin;
-    const infoHeaderHeight = 24;
-    context.fillStyle = "#f0f0f0";
-    context.fillRect(tableX, y, contentWidth, infoHeaderHeight);
-    context.fillStyle = "#111";
-    drawCellText("CLIENT", tableX, y, columnWidths[0], "bold 9px Arial", 12);
-    drawCellText("VEHICLE", tableX + columnWidths[0], y, columnWidths[1] + columnWidths[2], "bold 9px Arial", 12);
-    drawRule(tableX, y, tableX + contentWidth, y);
-    drawRule(tableX, y + infoHeaderHeight, tableX + contentWidth, y + infoHeaderHeight);
-    drawRule(tableX, y, tableX, y + infoHeaderHeight);
-    drawRule(tableX + columnWidths[0], y, tableX + columnWidths[0], y + infoHeaderHeight);
-    drawRule(tableX + contentWidth, y, tableX + contentWidth, y + infoHeaderHeight);
-    y += infoHeaderHeight;
-
-    const infoRows = [
-        [`NAME: ${data.clientName}`, `MAKE & MODEL: ${data.makeModel}`, `PLATE NO.: ${data.plateNo}`],
-        [`ADDRESS: ${data.address}`, `CHASSIS NO: ${data.chassisNo}`, `ENGINE NO.: ${data.engineNo}`],
-        [`CONTACT NUMBER: ${data.contact}`, `COLOR: ${data.color}`, `INSURANCE.: ${data.insurance}`]
-    ];
-    infoRows.forEach(row => {
-        const rowHeight = Math.max(...row.map((text, index) => {
-            context.font = "8px Arial";
-            return wrapCanvasText(context, text, columnWidths[index] - 12).length * 10 + 12;
-        }));
-        let x = tableX;
-        row.forEach((text, index) => {
-            drawRule(x, y, x, y + rowHeight);
-            drawCellText(text, x, y, columnWidths[index], "8px Arial", 10);
-            x += columnWidths[index];
-        });
-        drawRule(tableX + contentWidth, y, tableX + contentWidth, y + rowHeight);
-        drawRule(tableX, y + rowHeight, tableX + contentWidth, y + rowHeight);
-        y += rowHeight;
-    });
-    y += 10;
-
-    const workWidths = [contentWidth * 0.5, contentWidth * 0.25, contentWidth * 0.25];
-    const workHeaders = ["SCOPE OF WORKS", "COST OF LABOR", "COST OF PARTS"];
-    const drawWorkRow = (values, bold = false, textColor = "#111") => {
-        const font = bold ? "bold 8px Arial" : "8px Arial";
-        const rowHeight = Math.max(...values.map((value, index) =>
-            wrapCanvasText(context, value, workWidths[index] - 12).length * 11 + 10
-        ));
-        let x = tableX;
-        values.forEach((value, index) => {
-            drawRule(x, y, x, y + rowHeight);
-            context.font = font;
-            context.fillStyle = textColor;
-            context.textAlign = index ? "right" : "left";
-            const lines = wrapCanvasText(context, value, workWidths[index] - 12);
-            lines.forEach((line, lineIndex) => {
-                context.fillText(line, index ? x + workWidths[index] - 6 : x + 6, y + 5 + lineIndex * 11);
-            });
-            x += workWidths[index];
-        });
-        context.fillStyle = "#111";
-        drawRule(tableX + contentWidth, y, tableX + contentWidth, y + rowHeight);
-        drawRule(tableX, y + rowHeight, tableX + contentWidth, y + rowHeight);
-        y += rowHeight;
-    };
-    context.fillStyle = "#f0f0f0";
-    context.fillRect(tableX, y, contentWidth, 24);
-    context.fillStyle = "#111";
-    drawRule(tableX, y, tableX + contentWidth, y);
-    drawWorkRow(workHeaders, true);
-    let workNumber = 1;
-    getPrintableWorkRows(data).forEach(work => {
-        let description = String(work.desc || "").trim();
-        if (!description) return;
-        if (description.startsWith("*")) {
-            workNumber = 1;
-        } else {
-            description = `${workNumber}. ${description}`;
-            workNumber += 1;
-        }
-        drawWorkRow([
-            description,
-            work.labor ? formatPHP(work.labor) : "",
-            work.parts ? formatPHP(work.parts) : ""
-        ]);
-    });
-    if (data.noteHiddenDamage) {
-        drawWorkRow(["NOTE: HIDDEN DAMAGE ARE NOT INCLUDED", "", ""], true, "#c00000");
-    }
-    drawWorkRow([
-        "TOTAL LABOR/MATERIALS/PARTS:",
-        document.getElementById("totLabor").value,
-        document.getElementById("totParts").value
-    ], true);
-    drawWorkRow(["DOWNPAYMENT:", document.getElementById("downpayment").value, ""], true);
-    drawWorkRow(["TOTAL AMOUNT DUE:", document.getElementById("totDue").value, ""], true);
-    y += 14;
-
-    const signatureTop = y;
-    const signatureWidth = contentWidth / 2 - 20;
-    [preparedSignature, approvedSignature].forEach((image, index) => {
-        const x = margin + index * (contentWidth / 2) + 10;
-        const imageScale = Math.min(110 / image.naturalWidth, 42 / image.naturalHeight);
-        const imageWidth = image.naturalWidth * imageScale;
-        const imageHeight = image.naturalHeight * imageScale;
-        context.drawImage(image, x + (signatureWidth - imageWidth) / 2, signatureTop, imageWidth, imageHeight);
-        drawRule(x + 10, signatureTop + 46, x + signatureWidth, signatureTop + 46);
-        context.font = "bold 8px Arial";
-        context.textAlign = "center";
-        context.fillText(
-            index ? "APPROVED BY: ROLDAN DUEÑAS" : "PREPARED BY: BEVERLY BALATBAT",
-            x + signatureWidth / 2,
-            signatureTop + 50
-        );
-    });
-    y += 72;
-
-    const terms = [
-        "I HEREBY AUTHORIZE AND AGREE TO PAY FOR THE ABOVE REPAIRS AND WORK TO BE DONE ON MY VEHICLE INCLUDING ALL PARTS AND MATERIALS NECESSARY TO PERFORM THE SAME. I ALSO AGREE TO THE TERMS AND CONDITION STATED BELOW:",
-        "1. RLD AUTOWORX & TOWING SERVICES will not be held responsible for any losses or damages to the vehicle and its accessories or any articles of value left in the vehicle in case of theft, fire, accident or any other cause beyond the auto center's control.",
-        "2. Customer acknowledges an expenses mechanic lien to secure the amount of repairs thereto.",
-        "3. Company employees may operate vehicle for purposes of testing inspection and /or deliver at customer's risk.",
-        "4. No claims for damages to vehicle under this repair order will be considered unless received by the company within three (3) days after the vehicle has been delivered.",
-        "5. Customers agrees to pay interest at the rate of 3% per month on all accounts not paid when due.",
-        "6. RLD AUTOWORX & TOWING SERVICES will charge a daily storage fee of P300.00 on the vehicle from the day enter on the repair shop if not yet started of repair of vehicle.",
-        "7. RLD AUTOWORX & TOWING SERVICES to charge a daily storage fee of P300.00 on the vehicle not claimed on the date of upon completion of repair.",
-        "8. Hidden defects are not included in this evaluation.",
-        "9. Prices are subject to change without prior notice."
-    ];
-    terms.forEach(term => {
-        context.font = "7px Arial";
-        context.textAlign = "left";
-        const lines = wrapCanvasText(context, term, contentWidth);
-        lines.forEach(line => {
-            context.fillText(line, margin, y);
-            y += 9;
-        });
-        y += 2;
-    });
-
-    const logicalHeight = Math.max(1300, y + margin);
-    if (logicalHeight > 2200) {
-        throw new Error("This estimate is too long to fit in one image. Remove some work items and try again.");
-    }
-    const finalCanvas = document.createElement("canvas");
-    finalCanvas.width = pageWidth * pixelRatio;
-    finalCanvas.height = logicalHeight * pixelRatio;
-    const finalContext = finalCanvas.getContext("2d");
-    if (!finalContext) throw new Error("Image export is not supported by this browser.");
-    finalContext.fillStyle = "#fff";
-    finalContext.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
-    finalContext.drawImage(
-        canvas, 0, 0, canvas.width, finalCanvas.height, 0, 0, finalCanvas.width, finalCanvas.height
-    );
-    const dataUrl = finalCanvas.toDataURL("image/png");
-    const imageBytes = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
-    const bytes = new Uint8Array(imageBytes.length);
-    for (let index = 0; index < imageBytes.length; index += 1) {
-        bytes[index] = imageBytes.charCodeAt(index);
-    }
-    return { blob: new Blob([bytes], { type: "image/png" }), data };
-}
-
-async function saveEstimateImage() {
-    const button = document.getElementById("saveImageBtn");
-    const message = document.getElementById("estimateMessage");
-    let generatedImage;
-    button.disabled = true;
-    message.textContent = "Creating estimate image...";
-    try {
-        const { blob, data } = buildEstimateImage();
-        const fileName = `${estimateFilenameComponent(data.makeModel, "UNKNOWN VEHICLE")}_${estimateFilenameComponent(data.plateNo, "NO PLATE")}.png`;
-        const file = new File([blob], fileName, { type: "image/png" });
-        generatedImage = { blob, fileName };
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: "RLD Job Estimate" });
-            message.textContent = "Choose Photos or Gallery in the share menu to save the image.";
-            return;
-        }
-        downloadEstimateImage(blob, fileName, message);
-    } catch (error) {
-        if (error.name === "AbortError") {
-            message.textContent = "Image sharing was cancelled.";
-        } else if (error.name === "NotAllowedError") {
-            downloadEstimateImage(generatedImage && generatedImage.blob, generatedImage && generatedImage.fileName, message);
-        } else {
-            message.textContent = `Could not create or share the estimate image: ${error.message}`;
-        }
-    } finally {
-        button.disabled = false;
-    }
-}
-
-function downloadEstimateImage(blob, fileName, message) {
-    if (!blob || !fileName) {
-        message.textContent = "Could not share the image. Try Save as image again.";
-        return;
-    }
-    const downloadUrl = URL.createObjectURL(blob);
-    const download = document.createElement("a");
-    download.href = downloadUrl;
-    download.download = fileName;
-    download.click();
-    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-    message.textContent = "Image downloaded. Open it from Downloads or Files to save it to Photos or Gallery.";
 }
 
 // --- SAVE ESTIMATES AND QUEUE DRIVE SYNC ---
@@ -1779,7 +1915,8 @@ function clearEstimateForm() {
     worksBody.replaceChildren();
     addRow();
     editingEstimateId = null;
-    document.getElementById("saveBtn").textContent = "SAVE";
+    document.getElementById("saveBtn").setAttribute("aria-label", "Save estimate");
+    document.getElementById("saveBtn").title = "Save estimate";
     updateWorkNumbers();
     document.getElementById("estimateMessage").textContent = "";
     calc();
@@ -1808,7 +1945,13 @@ document.getElementById("saveBtn").addEventListener("click", function() {
             savedAt: existing ? existing.savedAt : savedAt,
             updatedAt: savedAt,
             username: existing ? existing.username : sessionStorage.getItem(ACTIVE_USER_KEY),
-            data: collectEstimateData(),
+            data: {
+                ...collectEstimateData(),
+                jobStatus: !existing || existing.data.jobStatus === "painting"
+                    ? "preparing"
+                    : existing.data.jobStatus || "preparing",
+                pickedUpAt: existing && existing.data.pickedUpAt || null
+            },
             syncStatus: "pending",
             deleted: false
         };
@@ -1823,6 +1966,7 @@ document.getElementById("saveBtn").addEventListener("click", function() {
             "Saved on this device and cleared from the form. It will sync when the Windows server is reachable.";
         syncPendingEstimates();
         renderHistory();
+        renderJobs();
     } catch (error) {
         document.getElementById("estimateMessage").textContent =
             `Could not save this estimate: ${error.message}`;

@@ -9,6 +9,7 @@ $payloadPath = Join-Path $wrapperStage "RLD-update-files.zip"
 $files = @(
     "README.md", "app.py", "cert_setup.py", "configure_storage.bat", "configure_storage.py",
     "header.png", "icon.svg", "index.html", "manifest.webmanifest", "requirements.txt",
+    "logout.png", "clear.png", "print.png", "save.png",
     "rld_logo.png",
     "units_price_list.json",
     "script.js", "service-worker.js", "signature1.png", "signature2.png", "start_server.bat",

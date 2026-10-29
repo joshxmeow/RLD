@@ -59,21 +59,28 @@
             </label>
             <nav class="app-navigation" aria-label="Main navigation">
                 <button type="button" id="showEstimatePage" class="nav-button" aria-current="page">
-                    <span class="nav-icon" aria-hidden="true">▤</span><span>Estimate</span>
+                    <span>Estimate</span>
                 </button>
                 <button type="button" id="showUnitsPage" class="nav-button">
-                    <span class="nav-icon" aria-hidden="true">🚘</span><span>Unit prices</span>
+                    <span>Units</span>
+                </button>
+                <button type="button" id="showJobsPage" class="nav-button">
+                    <span>Jobs</span>
                 </button>
                 <button type="button" id="showHistoryPage" class="nav-button">
-                    <span class="nav-icon" aria-hidden="true">◷</span><span>History</span>
+                    <span>History</span>
                 </button>
                 <button type="button" id="showAdminPage" class="nav-button" hidden>
                     <span class="nav-icon" aria-hidden="true">⚙</span><span>Manage accounts</span>
                 </button>
             </nav>
-            <button type="button" id="logoutBtn" class="logout-button">
-                <span aria-hidden="true">↪</span> Sign out
+            <button type="button" id="logoutBtn" class="logout-button icon-button" aria-label="Sign out" title="Sign out">
+                <img src="logout.png" alt="" aria-hidden="true">
             </button>
+        </div>
+        <div id="appUpdateNotice" class="update-notice no-print" role="status" aria-live="polite" hidden>
+            <span>A new app version is ready. Save your work, then refresh to update.</span>
+            <button type="button" id="applyAppUpdateBtn" class="update-action">Refresh app</button>
         </div>
         <p id="installMessage" class="auth-message" role="status" aria-live="polite" hidden></p>
 
@@ -213,10 +220,9 @@
             </div>
 
             <div class="buttons no-print">
-                <button type="button" class="btn btn-success" id="printBtn">PRINT DOCUMENT</button>
-                <button type="button" class="btn" id="saveImageBtn">SAVE AS IMAGE</button>
-                <button type="button" class="btn" id="saveBtn">SAVE</button>
-                <button type="button" class="btn" id="clearEntryBtn">CLEAR ENTRY</button>
+                <button type="button" class="btn btn-success icon-button estimate-action-button" id="printBtn" aria-label="Print estimate" title="Print estimate"><img src="print.png" alt="" aria-hidden="true"></button>
+                <button type="button" class="btn icon-button estimate-action-button" id="saveBtn" aria-label="Save estimate" title="Save estimate"><img src="save.png" alt="" aria-hidden="true"></button>
+                <button type="button" class="btn icon-button estimate-action-button" id="clearEntryBtn" aria-label="Clear estimate" title="Clear estimate"><img src="clear.png" alt="" aria-hidden="true"></button>
             </div>
             <p id="estimateMessage" class="auth-message no-print" role="status" aria-live="polite"></p>
         </form>
@@ -227,7 +233,7 @@
             <div class="units-heading">
                 <div>
                     <h1>Unit price list</h1>
-                    <p class="auth-help">Browse vehicles by maker. Swipe a unit from left to right to change its availability.</p>
+                    <p class="auth-help">Units are saved on this device for offline access and sync when the server is reachable. Browse by maker; swipe or tap a unit to change availability.</p>
                 </div>
                 <button type="button" id="addUnitBtn" class="btn btn-success units-add-button" aria-label="Add unit">+ Add unit</button>
             </div>
@@ -297,9 +303,25 @@
             <h1>Estimate history</h1>
             <p class="auth-help">Saved estimates stay on this device while offline and sync with the Windows server when it is reachable. Synced estimates are saved there as Excel files formatted for printing.</p>
             <label class="history-search-label" for="historySearch">Search estimates</label>
-            <input type="search" id="historySearch" placeholder="Search organization, vehicle, plate, date, or user">
+            <input type="search" id="historySearch" placeholder="Search owner, insurance, organization, vehicle, plate, date, or user">
             <div id="historyList"></div>
             <p id="historyMessage" class="auth-message" role="status" aria-live="polite"></p>
+        </section>
+
+        <section id="jobsPage" class="admin-panel no-print" hidden>
+            <div class="jobs-heading">
+                <h1>Jobs</h1>
+                <input type="search" id="jobsSearch" aria-label="Search jobs" placeholder="Search vehicle, client, number, or plate">
+            </div>
+            <div class="jobs-section">
+                <h2>Active jobs</h2>
+                <div id="activeJobsList" class="jobs-list" aria-live="polite"></div>
+            </div>
+            <div class="jobs-section jobs-history-section">
+                <h2>History</h2>
+                <div id="jobsHistoryList" class="jobs-list" aria-live="polite"></div>
+            </div>
+            <p id="jobsMessage" class="auth-message" role="status" aria-live="polite"></p>
         </section>
 
         <section id="adminPage" class="admin-panel no-print" hidden>
@@ -334,6 +356,6 @@
         </section>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script.js?update-notice=1"></script>
 </body>
 </html>

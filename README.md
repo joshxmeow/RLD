@@ -1,6 +1,6 @@
 # RLD AutoDesk Local Estimate Server
 
-The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited while connected; it includes color details and expands AT/MT to Automatic/Manual. The home-page light/dark theme preference is saved on each device. The `rld_logo.png` image is used for the login branding and installed app icon.
+The Windows computer runs the Flask/SQLite server. Phones use the installable website, keep estimates and a cached unit list on-device while offline, and send changes to the server when the app is open and the server is reachable again on the same Wi-Fi. The shared unit price list is grouped by maker and can be searched and edited online or offline; it includes color details and expands AT/MT to Automatic/Manual. The home-page light/dark theme preference is saved on each device. The `rld_logo.png` image is used for the login branding and installed app icon.
 
 ## First-time setup on the Windows server PC
 
@@ -31,20 +31,20 @@ The generated CA certificate is printed in the server window and stored at `<cho
 
 - **Android:** install the CA certificate from the phone's Security / Encryption & credentials settings (the wording varies by Android version). Open the HTTPS server address in Chrome, then choose **Install app** or **Add to Home screen**.
 - **iPhone:** open the certificate on the phone, install its configuration profile in Settings, then enable full trust for the RLD local CA under **Settings → General → About → Certificate Trust Settings**. Open the HTTPS address in Safari and choose **Share → Add to Home Screen**.
-- To print from a phone, tap **Print Document** in the estimate to open the phone's native print dialog directly from the app. Choose a paper size supported by the printer and enable **Fit to page** if that option is available.
-- To save an estimate as a PNG, tap **Save as image**. On phones, use the share sheet to choose Photos or Gallery if available; otherwise the image downloads to Files/Downloads so it can be saved to the gallery manually.
+- To print from a phone, tap the print icon in the estimate to open the phone's native print dialog directly from the app. Choose a paper size supported by the printer and enable **Fit to page** if that option is available.
 
 Only trust this private CA on devices you control. The browser should show a secure connection before the PWA is installed. The same HTTPS address must be used every time; changing the server's reserved IP means reinstalling/trusting the new certificate and adding the new address to the home screen.
 
-Updating the app files does not normally change the server certificate, so phones that already trust the RLD CA do not need to reinstall it. After updating the server, open the installed app while connected to the server's Wi-Fi and reload it once so the browser can install the new service worker and app files. The update may not appear while the app remains closed or offline. Reinstall/retrust the CA only if the CA certificate or server address changes.
+Updating the app files does not normally change the server certificate, so phones that already trust the RLD CA do not need to reinstall the app or certificate. When a new app version is ready, the app displays a refresh prompt; save any open estimate, then tap **Refresh app**. The app checks for updates when opened or brought back to the foreground, and periodically while it remains open. Update checks require a connection to the server.
 
 ## Offline use and sync behavior
 
 - A phone must first open the app and sign in successfully while connected to the server. The app shell, account verifier, and estimates are then stored on that device. Do not clear the browser/PWA's site data if unsynced estimates need to be preserved.
 - Estimates save to the device immediately. While online, changes sync automatically on reconnect, app resume, or while the app remains open. The history shows whether each item is synced, syncing, or still waiting.
-- The unit price list is shared through the server and requires a connection to view or change. Add or edit unit details in **Unit prices**, search across the list, and swipe a unit card from left to right (or tap its availability badge) to toggle availability.
+- The unit list is cached on each device for offline viewing and editing. Add, edit, delete, or change availability offline; queued changes sync when the server is reachable and the app is signed in. Search across the list, and swipe a unit card from left to right (or tap its availability badge) to toggle availability.
+- Jobs start in **Preparing**. Selecting **Quotation only** moves the job directly to History with that label. Use the history menu's **Active** action to return a job to the active list; only the administrator can delete a job from that menu.
 - The bundled Units Price List is imported once during the update. A vehicle without a listed selling price remains in the list with “Price not listed”; add its price when known.
-- On the estimate form, select **Add a red note** to include “NOTE: HIDDEN DAMAGE ARE NOT INCLUDED” below the scope of works and above the totals in print, image exports, and Excel estimates.
+- On the estimate form, select **Add a red note** to include “NOTE: HIDDEN DAMAGE ARE NOT INCLUDED” below the scope of works and above the totals in print and Excel estimates.
 - Saving an estimate clears the entry form. Use **Clear entry** to discard the current form, and search estimate history by organization, vehicle, plate, date, or user.
 - Choose the estimate date with the phone or computer's native calendar picker. The estimate displays and prints the date as `MONTH DAY, YEAR`; if left blank, the current local date is used. Previously saved organization/government names, vehicle make/models, job keywords, and insurers on that device are automatically suggested as you fill in those fields.
 - iOS may suspend a closed PWA, so it cannot reliably sync in the background while closed. Reopen the app or bring it to the foreground after reconnecting to Wi-Fi.
